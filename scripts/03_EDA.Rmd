@@ -1,0 +1,869 @@
+---
+title: "EDA"
+author: "Seraphina Shi"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r load_lib, include = FALSE, warning=FALSE, message=FALSE, echo=FALSE}
+# setwd("/home/seraphinashi/MissingDataInTheICU")
+
+# install.packages(c("corrplot", "reshape", "GGally", "dplyr", "ggfortify", "ggpubr", "RColorBrewer", "gplots"))
+# if (!requireNamespace("BiocManager", quietly = TRUE))  install.packages("BiocManager")
+# BiocManager::install("mixOmics")
+
+library(lubridate)
+library(stringr)
+library(tidyr)
+library(R.utils)
+library(data.table)
+library(corrplot)
+library(reshape)
+library(ggplot2)
+library(GGally)
+library(dplyr)
+library(grid)
+library(gridExtra)
+library(cowplot)
+library(ggfortify)
+library(ggpubr)
+library(mixOmics)
+library(RColorBrewer)
+library(gplots)
+library(here)
+library(gtsummary)
+```
+
+
+```{r setup, include = FALSE}
+plotFolder <- here("results","images", "v2", "EDA")
+if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
+
+rdataFolder <- here("data", "data_v2", "rdata")
+
+knitr::opts_chunk$set(
+  cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=FALSE,
+  results = 'markup', dev='png', dpi=150, fig.align = "center", fig.path=paste0(plotFolder, "/"),
+  cache.path=".cache/",
+  duplicate.label="allow"
+)
+
+set.seed(123)
+```
+
+
+```{r}
+load(here(rdataFolder, "02_2_varFusion.RData"))
+
+PreprocessDataFolder <- here("data", "data_v2", "DataPreprocessing")
+
+df <- read.csv(here(PreprocessDataFolder, "02_3_data_complt_blocks.csv"), row.names = 1, header = T)  
+df_imp <- read.csv(here(PreprocessDataFolder, "02_3_data_imputed_complt_blocks.csv"), row.names = 1, header = T)
+df_imp$Y_t_plus_1[df_imp$Y_t_plus_1 == 2] = 0
+```
+
+```{r}
+dim(df_imp)
+length(unique(df_imp$ICUSTAY_ID))
+
+data_ids <- read.csv(here(PreprocessDataFolder, "data_ids.csv"), row.names = 1, header = T)  
+  # read_csv("data/data_v2/DataPreprocessing/data_ids.csv")
+
+data_ids <- data_ids[data_ids$ICUSTAY_ID %in% df$ICUSTAY_ID, ]
+length(unique(data_ids$SUBJECT_ID))
+length(unique(data_ids$ICUSTAY_ID))
+```
+
+
+# Outcome Variable
+```{r outcome_distribution, fig.width=5, fig.height=3}
+ggplot(data=data.frame(Y_t_plus_1=c("1", "0"), Count = c(sum(df$Y_t_plus_1=="1"), sum(df$Y_t_plus_1=="0"))), 
+       aes(x=Y_t_plus_1, y=Count, fill=Y_t_plus_1)) + 
+  geom_bar(stat='identity') +
+  geom_text(aes(label=Count), vjust=0) +
+  scale_fill_manual(values = c("1"="#F8766D","0"="#00BFC4")) +
+  labs(title = "ICU Fatality in the next 12 hours") +
+  theme(plot.title = element_text(hjust=0.5))
+
+g <- ggplot(data=data.frame(Y_t_plus_1=c("1", "0"), Count = c(sum(df$Y_t_plus_1=="1"), sum(df$Y_t_plus_1=="0"))), 
+       aes(x=Y_t_plus_1, y=Count, fill=Y_t_plus_1)) + 
+  geom_bar(stat='identity') +
+  geom_text(aes(label=Count), vjust=0) +
+  scale_fill_manual(values = c("1"="#F8766D","0"="#00BFC4")) +
+  labs(title = "ICU Fatality in the next 12 hours") +
+  theme(plot.title = element_text(hjust=0.5))
+ggsave(sprintf("%s/outcome_distribution.png",plotFolder), g, width = 4, height = 3, dpi = 1200)
+```
+
+# Baseline Covariates
+## Before imputation
+```{r}
+tmp1 <- df %>% 
+  dplyr::select(ICUSTAY_ID, Y_t_plus_1, AGE, GENDER_F, INSURANCE_Y, RELIGION_Chrt, 
+                MARITAL_PARTN, LANGUAGE_ENGL, ETHNICITY_W, 
+                ETHNICITY_B, ETHNICITY_A, ETHNICITY_H) %>%
+  filter(Y_t_plus_1 == 1) %>%
+  unique() 
+
+tmp0 <- df %>% 
+  dplyr::select(ICUSTAY_ID, Y_t_plus_1, AGE, GENDER_F, INSURANCE_Y, RELIGION_Chrt, 
+                MARITAL_PARTN, LANGUAGE_ENGL, ETHNICITY_W, 
+                ETHNICITY_B, ETHNICITY_A, ETHNICITY_H) %>%
+  filter(! ICUSTAY_ID %in% tmp1$ICUSTAY_ID) %>% 
+  unique()
+
+tmp1 <- rbind(tmp1, tmp0)
+
+
+tmp1$Gender = ifelse(tmp1$GENDER_F == 1, "Female", "Male")
+tmp1$Marital = ifelse(tmp1$MARITAL_PARTN == 1, "Partner", "No partner")
+tmp1$Language = ifelse(tmp1$LANGUAGE_ENGL == 1, "English", "Other")
+tmp1$Ethnicity = ifelse(tmp1$ETHNICITY_W == 1, "White", 
+                        ifelse(tmp1$ETHNICITY_B == 1, "Black", 
+                               ifelse(tmp1$ETHNICITY_A ==1, "Asian", 
+                                      ifelse(tmp1$ETHNICITY_H==1, "Hispanic", "Other"))) )
+tmp1$Y = paste0("Y=",tmp1$Y_t_plus_1)
+tmp1$Age = tmp1$AGE
+tmp1$Religion = ifelse(tmp1$RELIGION_Chrt == 1, "Christian", "Other")
+tmp1$Insurance = ifelse(tmp1$INSURANCE_Y == 1, "Yes", "No")
+
+summary(tmp1$AGE)
+
+tmp1 %>% select(Y, Age, Gender, Ethnicity, Marital, Language, Religion, Insurance) %>%
+  tbl_summary(by = "Y", # statistic=list(all_categorical() ~ "{n} / {N} ({p}%)"),
+              statistic=list(all_categorical() ~ "{n} ({p}%)"),
+              digits = list(  ~ c(0, 1, 1)),
+              missing_text = "(Missing)") %>%
+   add_overall()
+```
+
+## After imputation
+```{r}
+tmp1 <- df_imp %>% 
+  dplyr::select(ICUSTAY_ID, Y_t_plus_1, AGE, GENDER_F, INSURANCE_Y, RELIGION_Chrt, 
+                MARITAL_PARTN, LANGUAGE_ENGL, ETHNICITY_W, 
+                ETHNICITY_B, ETHNICITY_A, ETHNICITY_H) %>%
+  filter(Y_t_plus_1 == 1) %>%
+  unique() 
+
+tmp0 <- df_imp %>% 
+  dplyr::select(ICUSTAY_ID, Y_t_plus_1, AGE, GENDER_F, INSURANCE_Y, RELIGION_Chrt, 
+                MARITAL_PARTN, LANGUAGE_ENGL, ETHNICITY_W, 
+                ETHNICITY_B, ETHNICITY_A, ETHNICITY_H) %>%
+  filter(! ICUSTAY_ID %in% tmp1$ICUSTAY_ID) %>% 
+  unique()
+
+tmp1 <- rbind(tmp1, tmp0)
+
+
+tmp1$Gender = ifelse(tmp1$GENDER_F == 1, "Female", "Male")
+tmp1$Marital = ifelse(tmp1$MARITAL_PARTN == 1, "Partner", "No partner")
+tmp1$Language = ifelse(tmp1$LANGUAGE_ENGL == 1, "English", "Other")
+tmp1$Ethnicity = ifelse(tmp1$ETHNICITY_W == 1, "White", 
+                        ifelse(tmp1$ETHNICITY_B == 1, "Black", 
+                               ifelse(tmp1$ETHNICITY_A ==1, "Asian", 
+                                      ifelse(tmp1$ETHNICITY_H==1, "Hispanic", "Other"))) )
+tmp1$Y = paste0("Y=",tmp1$Y_t_plus_1)
+tmp1$Age = tmp1$AGE
+tmp1$Religion = ifelse(tmp1$RELIGION_Chrt == 1, "Christian", "Other")
+tmp1$Insurance = ifelse(tmp1$INSURANCE_Y == 1, "Yes", "No")
+
+summary(tmp1$AGE)
+
+tmp1 %>% select(Y, Age, Gender, Ethnicity, Marital, Language, Religion, Insurance) %>%
+  tbl_summary(by = "Y", # statistic=list(all_categorical() ~ "{n} / {N} ({p}%)"),
+              statistic=list(all_categorical() ~ "{n} ({p}%)"),
+              digits = list(  ~ c(0, 1, 1)),
+              missing_text = "(Missing)") %>%
+   add_overall()
+```
+
+
+
+
+# Vital Signs
+```{r}
+make_box_plots <- function(df_box, vars){
+  meltData <- melt(df_box %>% dplyr::select(var_name_list$outcome, vars), id.vars = "Y_t_plus_1") 
+  meltData$Y_t_plus_1 <- as.factor(meltData$Y_t_plus_1)
+  pi <- ggplot(meltData, aes(x = variable, y = value, color = Y_t_plus_1)) +
+    geom_boxplot(position = position_dodge(width = 1)) +  
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_color_manual(values = c("1"="#F8766D","0"="#00BFC4"), labels = c("yes", "no")) +
+    labs(color="Mortality")
+  return(pi)
+}
+```
+
+## Average Vital Sign Measurements in each 12 hours
+### Before imputation
+```{r box_plot_vital_values, fig.height=3, fig.width=10}
+p1 <- make_box_plots(df, var_name_list$vitals[1:3]) +
+  labs(x = "",  title = "") 
+leg <- get_legend(p1)
+p1 <- p1 +  theme(legend.position = "none")
+p2 <- make_box_plots(df, var_name_list$vitals[4:7]) +
+  labs(x = "",  title = "") +
+  theme(legend.position = "none")
+p3 <- make_box_plots(df, var_name_list$vitals[8:11]) +
+  labs(x = "", title = "") +
+  theme(legend.position = "none")
+
+gridExtra::grid.arrange(p1, p2, p3, leg, 
+                        layout_matrix = rbind(c(1,2,3,4)),
+                        widths = c(3,4,4,1),
+                        top = textGrob(paste("Vital Sign Measurements"), gp=gpar(fontsize=18)))
+
+g <- arrangeGrob(p1, p2, p3, leg, 
+                 layout_matrix = rbind(c(1,2,3,4)),
+                 widths = c(3,4,4,1),
+                 top = textGrob(paste("Vital Sign Measurements"), gp=gpar(fontsize=18)))
+
+ggsave(file=sprintf("%s/box_plot_vital_values.png",plotFolder), g, width = 10, height = 3, dpi = 1200)
+
+ggsave(file=sprintf("%s/box_plot_vital_values.pdf",plotFolder), g, width = 10, height = 3, dpi = 1200) 
+
+```
+
+```{r include=FALSE}
+tbl <- df %>%
+  select(unname(c(unlist(var_name_list$vitals),unlist(var_name_list$outcome)))) %>%
+  tbl_summary(by = Y_t_plus_1,
+              # type = all_continuous() ~ "continuous2",
+              statistic=list(all_continuous() ~ "{median} ({p25}, {p75}) [missing: {p_miss}]"),
+              digits = list(  ~ c(2, 1, 1, 1)),
+              missing = "no")
+tbl
+as_kable(tbl, format = "latex")
+
+
+tbl <- df %>%
+  select(unname(c(unlist(var_name_list$labs),unlist(var_name_list$outcome)))) %>%
+  tbl_summary(by = Y_t_plus_1,
+              # type = all_continuous() ~ "continuous2",
+              statistic=list(all_continuous() ~ "{median} ({p25}, {p75}) [missing: {p_miss}]"),
+              digits = list(  ~ c(2, 1, 1, 1)),
+              missing = "no")
+tbl
+as_kable(tbl, format = "latex")
+
+
+
+tbl <- df %>%
+  select(unname(c(unlist(var_name_list$num_vitals), 
+                  unlist(var_name_list$hours_missing_vitals),
+                  unlist(var_name_list$outcome)))) %>%
+  tbl_summary(by = Y_t_plus_1,
+              # type = all_continuous() ~ "continuous2",
+              statistic=list(all_continuous() ~ "{median} ({p25}, {p75})"),
+              digits = list(  ~ c(2, 1, 1)),
+              missing_text = "(Missing)")
+tbl
+as_kable(tbl, format = "latex")
+
+tbl <- df %>%
+  select(unname(c(unlist(var_name_list$num_outlier_vitals), 
+                  unlist(var_name_list$outcome)))) %>%
+  tbl_summary(by = Y_t_plus_1,
+              # type = all_continuous() ~ "continuous2",
+              statistic=list(all_continuous() ~ "{mean} ({p25}, {p75})"),
+              digits = list(  ~ c(2, 1, 1)),
+              missing = "no")
+tbl
+as_kable(tbl, format = "latex")
+
+tbl <- df %>%
+  select(unname(c(unlist(var_name_list$num_labs), 
+                  unlist(var_name_list$outcome)))) %>%
+  mutate(n_lab_grp5 = as.integer(df$n_lab_grp5)) %>% 
+  tbl_summary(by = Y_t_plus_1,
+              statistic=list(all_continuous() ~ "{median} ({p25}, {p75}) [{p75} - {p25}]"),
+              digits = list(  ~ c(2, 1, 1)),
+              missing = "no")
+tbl
+as_kable(tbl, format = "latex")
+```
+
+### After imputation
+```{r box_plot_vital_values_imputed, fig.height=3, fig.width=15}
+p1 <- make_box_plots(df_imp, var_name_list$vitals[1:3]) +
+  labs(x = "",  title = "", y = "mmHg") 
+leg <- get_legend(p1)
+p1 <- p1 +  theme(legend.position = "none")
+
+p2 <- make_box_plots(df_imp, c("GCS_Eye",  "GCS_Verbal",  "GCS_Motor")) +
+  labs(x = "",  title = "", y ="scale") +
+  theme(legend.position = "none")
+
+p3 <- make_box_plots(df_imp, "GCS_Total") +
+  labs(x = "",  title = "", y ="scale") +
+  theme(legend.position = "none")
+
+p4 <- make_box_plots(df_imp, "HR") +
+  labs(x = "", title = "", y = "bpm") +
+  theme(legend.position = "none")
+
+p5 <- make_box_plots(df_imp, "RR") +
+  labs(x = "", title = "", y = "insp/min") +
+  theme(legend.position = "none")
+
+p6 <- make_box_plots(df_imp, "SpO2") +
+  labs(x = "", title = "", y = "%") +
+  theme(legend.position = "none")
+
+p7 <- make_box_plots(df_imp, "TempC") +
+  labs(x = "", title = "", y = "Celsius") +
+  theme(legend.position = "none")
+
+gridExtra::grid.arrange(p1, p2, p3, p4, p5, p6, p7, leg, 
+                        layout_matrix = rbind(c(1,2,3,4,5,6,7,8)),
+                        widths = c(4,4,2,2,2,2,2,1),
+                        top = textGrob(paste("Vital Sign Measurements"), gp=gpar(fontsize=18)))
+
+g <- arrangeGrob(p1, p2, p3, p4, p5, p6, p7, leg, leg,
+                        layout_matrix = rbind(c(1,1,1,4,5,6,8),
+                                              c(2,2,2,3,7,NA,9)),
+                        # widths = c(4,4,2,2,2,2,2,1),
+                 top = textGrob(paste("Vital Sign Measurements in each 12-Hour Time Block"), gp=gpar(fontsize=15)))
+ggsave(file=sprintf("%s/box_plot_vital_values_imputed.png",plotFolder), g, width = 10, height = 3, dpi = 1200) 
+ggsave(file=sprintf("%s/box_plot_vital_values_imputed.pdf",plotFolder), g, width = 7, height = 5, dpi = 1200) 
+```
+
+
+## Number of hours without vital sign measurements in each 12 hours
+```{r box_plot_hour_missing_vital, fig.height=3, fig.width=9}
+box_plot_vital <- make_box_plots(df, var_name_list$hours_missing_vitals) +
+  labs(x = "", 
+       title = "Vital Sign Missingness Rates (Number of Hours without Observations) in each 12-Hour Time Block",
+       y = "count of hours") +
+  scale_x_discrete(labels = gsub("h_m_", "", var_name_list$hours_missing_vitals)) + 
+  scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.1)))))
+box_plot_vital
+ggsave(sprintf("%s/box_plot_hour_missing_vital.png",plotFolder), box_plot_vital, width = 9, height = 3, dpi = 1200)
+ggsave(sprintf("%s/box_plot_hour_missing_vital.pdf",plotFolder), box_plot_vital, width = 9, height = 3, dpi = 1200)
+```
+
+## Vital sign measurement rates in each 12 hours
+```{r box_plot_vital_count, fig.height=3, fig.width=9}
+box_plot_vital <- make_box_plots(df, var_name_list$num_vitals) +
+  labs(x = "", 
+       title = "Vital Sign Sampling Frequencies in each 12-Hour Time Block",
+       y = "count") +
+  scale_x_discrete(labels = gsub("n_", "", var_name_list$num_vitals))
+box_plot_vital
+ggsave(sprintf("%s/box_plot_vital_count.png",plotFolder), box_plot_vital, width = 9, height = 3, dpi = 1200)
+ggsave(sprintf("%s/box_plot_vital_count.pdf",plotFolder), box_plot_vital, width = 9, height = 3, dpi = 1200)
+```
+
+## Vital sign outlier rates every 12 hours
+```{r box_plot_vital_outlier_count, fig.height=3, fig.width=9}
+box_plot_vital <- make_box_plots(df, var_name_list$num_outlier_vitals) +
+  labs(x = "", 
+       title = "Vital Sign Outlier Rates in each 12-Hours Time Block",
+       y = "count") +
+  scale_x_discrete(labels = gsub("n_o_", "", var_name_list$num_outlier_vitals))
+box_plot_vital 
+ggsave(sprintf("%s/box_plot_vital_outlier_count.png",plotFolder), box_plot_vital, width = 9, height = 3, dpi = 1200)
+ggsave(sprintf("%s/box_plot_vital_outlier_count.pdf",plotFolder), box_plot_vital, width = 9, height = 3, dpi = 1200)
+```
+
+## Average lab test values in each 12 hours
+### Before imputation
+```{r box_plot_lab, fig.height = 3, fig.width=11}
+
+# {r box_plot_lab, fig.height = 15, fig.width=6}
+# 
+# # box_plot_lab1 <- make_box_plots(vitals_labs_summary$lab_summary$ABB[order(vitals_labs_summary$lab_summary$max)][1:7]) + labs(x = "")
+# box_plot_lab1 <- make_box_plots(df, var_name_list$labs[1:7]) + labs(x = "")
+# box_plot_lab2 <- make_box_plots(df, var_name_list$labs[7 + 1:7]) + labs(x = "")
+# box_plot_lab3 <- make_box_plots(df, var_name_list$labs[14 + 1:7]) + labs(x = "")
+# box_plot_lab4 <- make_box_plots(df, var_name_list$labs[21 + 1:7]) + labs(x = "")
+# box_plot_lab5 <- make_box_plots(df, var_name_list$labs[28 + 1:7]) + labs(x = "Lab Tests")
+# 
+# grid.arrange(box_plot_lab1, box_plot_lab2, box_plot_lab3, box_plot_lab4, box_plot_lab5, ncol = 1,
+#              top = textGrob("Lab Tests Values", gp=gpar(fontsize=15)))
+# 
+# g <- arrangeGrob(box_plot_lab1, box_plot_lab2, box_plot_lab3, box_plot_lab4, box_plot_lab5, ncol = 1,
+#              top = textGrob("Lab Tests Values", gp=gpar(fontsize=15)))
+# ggsave(file=sprintf("%s/box_plot_lab_values.png",plotFolder), g, width = 6, height = 15, dpi = 1200) 
+
+box_plot_lab <- make_box_plots(df, var_name_list$labs) + labs(x = "Lab Tests", title = "Laboratory Testing Measurements")
+box_plot_lab
+ggsave(file=sprintf("%s/box_plot_lab_values.png",plotFolder), box_plot_lab, width = 11, height = 3, dpi = 1200) 
+ggsave(file=sprintf("%s/box_plot_lab_values.pdf",plotFolder), box_plot_lab, width = 11, height = 3, dpi = 1200) 
+
+```
+
+
+### After imputation
+
+```{r box_plot_lab_values_imputed, fig.height=5, fig.width=9}
+p1 <- make_box_plots(df_imp, c("ALT","AST")) +    # 5 digits
+  labs(x = "", title = "", y = "values")
+leg <- get_legend(p1)
+p1 <- p1 +  theme(legend.position = "none") 
+
+p2 <- make_box_plots(df_imp, c("ALK")) +  # 5000
+  labs(x = "",title = "", y="") +
+  theme(legend.position = "none")
+
+p3 <- make_box_plots(df_imp, c("BG", "PLT")) +  # 1000
+  labs(x = "",title = "", y="") +
+  theme(legend.position = "none")
+
+p4 <- make_box_plots(df_imp, c("PO2", "BUN", "WBCs")) +  # 500
+  labs(x = "",title = "", y="") +
+  theme(legend.position = "none")
+
+p5 <- make_box_plots(df_imp, c("PCO2", "Na", "Cl", "MCV", "NE", "PTT", "PT")) + #100
+  labs(x = "",title = "", y="") +
+  theme(legend.position = "none")
+
+p6 <- make_box_plots(df_imp, c("MO", "EO", "TBil")) + #100
+  labs(x = "",title = "", y="value") +
+  theme(legend.position = "none")
+
+p7 <- make_box_plots(df_imp, c("K", "HCO3", "AG", "Cr", "RBCs", "HGB", 
+                               "HCT", "MCH", "MCHC", "RDW",  "BA",
+                               "Lac", "Ca", "Mg", "Phos")) + # < 100
+  labs(x = "",title = "", y="") +
+  theme(legend.position = "none")
+
+gridExtra::grid.arrange(p1, p2, p3, p4, p5, p6, p7, leg, leg,
+                        layout_matrix = rbind(c(1,1,1,2,2,3,3,3,4,4,4,4,5,5,5,5,5,5,5,8,8),
+                                              c(6,6,6,6,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,9,9)),
+                        #widths = c(3,2.3,3,4,7,3,15,1),
+                        top = textGrob(paste("Laboratory Testing Measurements in each 12-Hour Time Block"), gp=gpar(fontsize=18)))
+
+g <- arrangeGrob(p1, p2, p3, p4, p5, p6, p7, leg, leg,
+                 layout_matrix = rbind(c(1,1,1,2,2,3,3,3,4,4,4,4,5,5,5,5,5,5,5,8,8),
+                                      c(6,6,6,6,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,9,9)),
+                        #layout_matrix = rbind(c(1,2,3,4,5,6,7)),
+                        #widths = c(3,2.3,3,4,7,3,15,1),
+                 top = textGrob(paste("Laboratory Testing Measurements in each 12-Hour Time Block"), gp=gpar(fontsize=18)))
+ggsave(file=sprintf("%s/box_plot_lab_values_imputed.png",plotFolder), g, width = 9, height = 5, dpi = 1200) 
+ggsave(file=sprintf("%s/box_plot_lab_values_imputed.pdf",plotFolder), g, width = 9, height = 5, dpi = 1200) 
+
+```
+
+
+
+## Lab test measurement rates in each 12 hours
+```{r box_plot_lab_count, fig.height = 3, fig.width=11}
+box_plot_lab <- make_box_plots(df,var_name_list$num_labs) + 
+  labs(x = "", 
+       title = "Laboratory Testing Frequencies in each 12-Hour Time Block",
+       y = "count") +
+  scale_x_discrete(labels = gsub("n_", "", var_name_list$num_labs)) + 
+  theme(plot.title = element_text(size=18))
+
+box_plot_lab
+ggsave(sprintf("%s/box_plot_lab_count.png",plotFolder), box_plot_lab, width = 11, height = 3, dpi = 1200)
+ggsave(sprintf("%s/box_plot_lab_count.pdf",plotFolder), box_plot_lab, width = 11, height = 3, dpi = 1200)
+
+```
+
+
+
+<!-- ## Pair Plots  -->
+<!-- ### Vitals before imputation -->
+<!-- ```{r pair_plot_vital, fig.height=11, fig.width=11} -->
+<!-- pair_plot_vital <- ggpairs(df %>% -->
+<!--                              as.data.frame() %>%  -->
+<!--                              dplyr::select(var_name_list$vitals), -->
+<!--                            mapping=ggplot2::aes(colour = as.character(df$Y_t_plus_1), alpha=0.5),   -->
+<!--                            legend = 1) + -->
+<!--   scale_color_manual(values = c("1"="#F8766D","0"="#00BFC4"), -->
+<!--                      name = "Fatality During Next 12 Hours") + -->
+<!--   scale_fill_manual(values = c("1"="#F8766D","0"="#00BFC4"), -->
+<!--                     name = "Fatality During Next 12 Hours") + -->
+<!--   theme(legend.position = "bottom") -->
+<!-- pair_plot_vital -->
+<!-- ggsave(file=sprintf("%s/pair_plot_vital.png",plotFolder), pair_plot_vital, width = 12, height = 12, dpi = 1200)  -->
+<!-- ggsave(file=sprintf("%s/pair_plot_vital.pdf",plotFolder), pair_plot_vital, width = 12, height = 12, dpi = 1200)  -->
+
+<!-- ``` -->
+<!-- ### Vitals after imputation -->
+<!-- ```{r pair_plot_vital_imputed, fig.height=11, fig.width=11} -->
+<!-- pair_plot_vital_imp <- ggpairs(df_imp %>% -->
+<!--                              as.data.frame() %>%  -->
+<!--                              dplyr::select(var_name_list$vitals), -->
+<!--                            mapping=ggplot2::aes(colour = as.character(df_imp$Y_t_plus_1), alpha=0.5),   -->
+<!--                            legend = 1) + -->
+<!--   scale_color_manual(values = c("1"="#F8766D","0"="#00BFC4"), -->
+<!--                      name = "Fatality During Next 12 Hours") + -->
+<!--   scale_fill_manual(values = c("1"="#F8766D","0"="#00BFC4"), -->
+<!--                     name = "Fatality During Next 12 Hours") + -->
+<!--   theme(legend.position = "bottom") -->
+<!-- pair_plot_vital_imp -->
+<!-- ggsave(file=sprintf("%s/pair_plot_vital_imputed.png",plotFolder), pair_plot_vital_imp, width = 12, height = 12, dpi = 1200) -->
+<!-- ggsave(file=sprintf("%s/pair_plot_vital_imputed.pdf",plotFolder), pair_plot_vital_imp, width = 12, height = 12, dpi = 1200)  -->
+
+<!-- ``` -->
+
+<!-- ### Lab tests before imputation -->
+<!-- ```{r pair_plot_labs, fig.height=20, fig.width=20} -->
+<!-- pair_plot_labs <- -->
+<!--   ggpairs(df %>% -->
+<!--           as.data.frame() %>% -->
+<!--           select(var_name_list$labs), -->
+<!--         mapping=ggplot2::aes(colour = as.character(df$Y_t_plus_1), alpha=0.5), -->
+<!--         legend = 1, -->
+<!--         cardinality_threshold = NULL) + -->
+<!--   scale_color_manual(values = c("1"="#F8766D","0"="#00BFC4"), -->
+<!--                      name = "Fatality During Next 12 Hours") + -->
+<!--   scale_fill_manual(values = c("1"="#F8766D","0"="#00BFC4"), -->
+<!--                     name = "Fatality During Next 12 Hours") + -->
+<!--   theme(legend.position = "bottom") -->
+<!-- pair_plot_labs -->
+<!-- ggsave(file=sprintf("%s/pair_plot_lab.png",plotFolder), pair_plot_labs, width = 20, height = 20, dpi = 1200)  -->
+<!-- ggsave(file=sprintf("%s/pair_plot_lab.pdf",plotFolder), pair_plot_labs, width = 20, height = 20, dpi = 1200)  -->
+
+<!-- ``` -->
+
+
+<!-- ### Lab tests after imputation -->
+<!-- ```{r pair_plot_labs_imputed, fig.height=20, fig.width=20} -->
+<!-- pair_plot_labs <- -->
+<!--   ggpairs(df_imp %>% -->
+<!--           as.data.frame() %>% -->
+<!--           select(var_name_list$labs), -->
+<!--         mapping=ggplot2::aes(colour = as.character(df$Y_t_plus_1), alpha=0.5), -->
+<!--         legend = 1, -->
+<!--         cardinality_threshold = NULL) + -->
+<!--   scale_color_manual(values = c("1"="#F8766D","0"="#00BFC4"), -->
+<!--                      name = "Fatality During Next 12 Hours") + -->
+<!--   scale_fill_manual(values = c("1"="#F8766D","0"="#00BFC4"), -->
+<!--                     name = "Fatality During Next 12 Hours") + -->
+<!--   theme(legend.position = "bottom") -->
+<!-- pair_plot_labs -->
+<!-- ggsave(file=sprintf("%s/pair_plot_lab_imputed.png",plotFolder), pair_plot_labs, width = 20, height = 20, dpi = 1200)  -->
+<!-- ggsave(file=sprintf("%s/pair_plot_lab_imputed.pdf",plotFolder), pair_plot_labs, width = 20, height = 20, dpi = 1200)  -->
+
+<!-- ``` -->
+
+# Correlation Matrix Plot
+Since we don't have missingness for gender, age, and insurance, the correlations related to them are unknown.
+```{r correlation_matrix, fig.height = 20, fig.width = 20}
+corrplot(cor(df_imp %>% mutate(Y_t_plus_1 = as.numeric(Y_t_plus_1))),
+         method="color",
+         tl.col = unname(unlist(var_name_colors)),
+         mar = c(0, 0, 0, 0))
+
+png(file = sprintf("%s/correlation_matrix.png",plotFolder), width = 1800, height = 1800)
+par(mar = c(4, 4, 0.1, 0.1))
+g <- corrplot(cor(df_imp %>% mutate(Y_t_plus_1 = as.numeric(Y_t_plus_1))), method="color", tl.col = unname(unlist(var_name_colors)))
+dev.off()
+```
+
+```{r correlation_matrix_0, fig.height = 20, fig.width = 20}
+corrplot(cor(df_imp %>%
+               mutate(Y_t_plus_1 = as.numeric(Y_t_plus_1)) %>%
+               filter(Y_t_plus_1==0)),
+         method="color",
+         tl.col = unname(unlist(var_name_colors)),
+         mar = c(0, 0, 0, 0))
+
+png(file = sprintf("%s/correlation_matrix_0.png",plotFolder), width = 1800, height = 1800)
+par(mar = c(4, 4, 0.1, 0.1))
+g <- corrplot(cor(df_imp %>% mutate(Y_t_plus_1 = as.numeric(Y_t_plus_1))), method="color", tl.col = unname(unlist(var_name_colors)))
+dev.off()
+```
+
+```{r correlation_matrix_1, fig.height = 20, fig.width = 20}
+corrplot(cor(df_imp %>%
+               mutate(Y_t_plus_1 = as.numeric(Y_t_plus_1)) %>%
+               filter(Y_t_plus_1==1)),
+         method="color",
+         tl.col = unname(unlist(var_name_colors)),
+         mar = c(0, 0, 0, 0))
+
+png(file = sprintf("%s/correlation_matrix_1.png",plotFolder), width = 1800, height = 1800)
+par(mar = c(4, 4, 0.1, 0.1))
+g <- corrplot(cor(df_imp %>% mutate(Y_t_plus_1 = as.numeric(Y_t_plus_1))), method="color", tl.col = unname(unlist(var_name_colors)))
+dev.off()
+```
+
+<!-- # Heatmaps -->
+<!-- ```{r fig.height=10, fig.width=10} -->
+<!-- library(RColorBrewer) -->
+<!-- library(gplots) -->
+
+<!-- set.seed(123) -->
+<!-- random_half_ICUSTAY <- sample(unique(df$ICUSTAY_ID), length(unique(df$ICUSTAY_ID))/4) -->
+<!-- df_heatmap <- df[df$ICUSTAY_ID %in% c(random_half_ICUSTAY, df$ICUSTAY_ID[df$Y_t_plus_1==1]),] -->
+<!-- # df_heatmap <- df -->
+
+
+<!-- Y = df_heatmap$Y_t_plus_1 -->
+
+<!-- Xheat <- df_heatmap %>% dplyr::select(-Y_t_plus_1, -ICUSTAY_ID, -half_day) -->
+
+<!-- for (var in colnames(Xheat)){ -->
+<!--   if(var %in% var_name_list$vitals){ -->
+<!--     min_range <- switch (var, -->
+<!--       "SpO2" = 60, -->
+<!--       "TempC" = 28, -->
+<!--       "RR" = 5, -->
+<!--       "DBP" = 20, -->
+<!--       "HR" = 20, -->
+<!--       "BPs" = 40, -->
+<!--       "BPd" = 20, -->
+<!--       "BPm" = 30, -->
+<!--       "GCS_Eye" = 1, -->
+<!--       "GCS_Verbal" = 1, -->
+<!--       "GCS_Motor" = 1, -->
+<!--       "GCS_Total" = 3 -->
+<!--     ) -->
+<!--     max_range <- switch (var, -->
+<!--       "SpO2" = 100, -->
+<!--       "TempC" = 42, -->
+<!--       "RR" = 40, -->
+<!--       "DBP" = 180, -->
+<!--       "HR" = 160, -->
+<!--       "BPs" = 250, -->
+<!--       "BPd" = 180, -->
+<!--       "BPm" = 210, -->
+<!--       "GCS_Eye" = 4, -->
+<!--       "GCS_Verbal" = 5, -->
+<!--       "GCS_Motor" = 6, -->
+<!--       "GCS_Total" = 15 -->
+<!--     ) -->
+<!--     Xheat[[var]] <- (Xheat[[var]] - min_range) / (max_range - min_range) -->
+<!--   } else if (var %in% var_name_list$hours_missing_vitals) { -->
+<!--     min_range <- 0 -->
+<!--     max_range <- 12 -->
+<!--     Xheat[[var]] <- (Xheat[[var]] - min_range) / (max_range - min_range) -->
+<!--   } else if (var %in% c("AGE", -->
+<!--                         var_name_list$num_outlier_vitals, -->
+<!--                         var_name_list$num_vitals, -->
+<!--                         var_name_list$num_outlier_vitals)) -->
+<!--     min_range <- min(Xheat[[var]][!is.na(Xheat[[var]])]) -->
+<!--     max_range <- max(Xheat[[var]][!is.na(Xheat[[var]])]) -->
+<!--     if(max_range - min_range != 0){ -->
+<!--       Xheat[[var]] <- (Xheat[[var]] - min_range) / (max_range - min_range) -->
+<!--     } -->
+<!-- } -->
+
+<!-- Xheat <- as.matrix(Xheat) -->
+<!-- row.names(Xheat) <- row.names(df_heatmap) -->
+
+
+<!-- Y.colors  <- rep("#F8766D", nrow(df_heatmap)) -->
+<!-- Y.colors [Y == 0] <- "#00BFC4" -->
+
+
+<!-- Comm.colors <- Y.colors -->
+
+<!-- # breaks=qq, -->
+<!-- qq = seq(0, 1, length = 9) -->
+
+<!-- # cols_heatmap <- brewer.pal(6,"PiYG") -->
+<!-- grns = brewer.pal(8, "Greens") -->
+<!-- reds = brewer.pal(8, "YlOrRd") -->
+<!-- cols_heatmap <- reds[8:1] -->
+
+<!-- # column colors -->
+<!-- cols_column <- unname(unlist(var_name_colors))[-c(1:3)] -->
+
+
+<!-- Xheat_1 <- Xheat[Y == 1,] -->
+<!-- Xheat_0 <- Xheat[Y == 0,] -->
+
+<!-- Comm.colors1 <- rep("#F8766D", nrow(Xheat_1)) -->
+<!-- Comm.colors0 <- rep("#00BFC4", nrow(Xheat_0)) -->
+
+<!-- ``` -->
+
+<!-- ### Ungrouped columns -->
+
+<!-- ```{r results='hide'} -->
+<!-- png(here(plotFolder,"heatmap_ungrouped_col.png"),width=500, height=700) -->
+<!-- heatmap.2(Xheat, -->
+<!--           Colv=FALSE, -->
+<!--           trace="none", -->
+<!--           col = cols_heatmap, -->
+<!--           dendrogram='none', -->
+<!--           labRow=FALSE, -->
+<!--           main = "Heatmap of Scaled Data", -->
+<!--           RowSideColors = Comm.colors, -->
+<!--           key.title = "Color Key\n& Histogram", -->
+<!--           key.xlab=NA, -->
+<!--           keysize=2, -->
+<!--           lhei = c(2,17), -->
+<!--           lwid = c(2, 7), -->
+<!--           breaks=qq, -->
+<!--           colCol = cols_column -->
+<!--           ) -->
+<!-- legend(y=1.05, x=.12, xpd=TRUE, -->
+<!--     legend = c("ICU_Dealth","Not ICU_Dealth"), -->
+<!--     col = c("#F8766D", "#00BFC4"), -->
+<!--     lty= 1, -->
+<!--     lwd = 5, -->
+<!--     cex=.7 -->
+<!-- ) -->
+<!-- dev.off() -->
+<!-- ``` -->
+
+<!-- ![](images/EDA/heatmap_ungrouped_col.png) -->
+
+<!-- #### ICU death vs not ICU death -->
+
+<!-- ```{r results='hide'} -->
+<!-- png(here(plotFolder,"heatmap_ungrouped_col_1.png"),width=500, height=700) -->
+<!-- par(cex.main=1.8) -->
+<!-- heatmap.2(Xheat_1, -->
+<!--           Colv=FALSE, -->
+<!--           trace="none", -->
+<!--           dendrogram='none', -->
+<!--           col = cols_heatmap, -->
+<!--           labRow=FALSE, -->
+<!--           main = "Scaled augmented data matrix \n observations among deaths", -->
+<!--           # RowSideColors = Comm.colors1, -->
+<!--           key.title = "Color Key", -->
+<!--           key.xlab=NA, -->
+<!--           keysize=1.5, -->
+<!--           lmat = rbind(c(0,3), c(2,1), c(0,4)), -->
+<!--           lhei = c(2,19,1.5), -->
+<!--           lwid = c(0.1, 7), -->
+<!--           breaks=qq, -->
+<!--           colCol = cols_column -->
+<!--           ) -->
+<!-- # legend(y=1.05, x=.12, xpd=TRUE, -->
+<!-- #     legend = c("ICU_Dealth","Not ICU_Dealth"), -->
+<!-- #     col = c("#F8766D", "#00BFC4"), -->
+<!-- #     lty= 1, -->
+<!-- #     lwd = 5, -->
+<!-- #     cex=.7 -->
+<!-- # ) -->
+<!-- dev.off() -->
+
+
+<!-- png(here(plotFolder,"heatmap_ungrouped_col_0.png"),width=500, height=700) -->
+<!-- par(cex.main=1.8) -->
+<!-- heatmap.2(Xheat_0, -->
+<!--           Colv=FALSE, -->
+<!--           trace="none", -->
+<!--           dendrogram='none', -->
+<!--           col = cols_heatmap, -->
+<!--           labRow=FALSE, -->
+<!--           main = "Scaled augmented data matrix \n observations among non-deaths", -->
+<!--           # RowSideColors = Comm.colors0, -->
+<!--           key.title = "Color Key", -->
+<!--           key.xlab=NA, -->
+<!--           keysize=1.5, -->
+<!--           lmat = rbind(c(0,3), c(2,1), c(0,4)), -->
+<!--           lhei = c(2,19,1.5), -->
+<!--           lwid = c(0.1, 7), -->
+<!--           breaks=qq, -->
+<!--           colCol = cols_column -->
+<!--           ) -->
+<!-- # legend(y=1.05, x=.12, xpd=TRUE, -->
+<!-- #     legend = c("ICU_Dealth","Not ICU_Dealth"), -->
+<!-- #     col = c("#F8766D", "#00BFC4"), -->
+<!-- #     lty= 1, -->
+<!-- #     lwd = 5, -->
+<!-- #     cex=.7 -->
+<!-- # ) -->
+<!-- dev.off() -->
+
+
+<!-- ``` -->
+
+<!-- ```{r, echo=FALSE,out.width="49%", out.height="20%",fig.cap=" ", fig.show='hold',fig.align='center'} -->
+<!-- knitr::include_graphics(c(here(plotFolder,"heatmap_ungrouped_col_1.png"),here(plotFolder,"heatmap_ungrouped_col_0.png"))) -->
+<!-- ``` -->
+
+<!-- ### Grouped columns -->
+<!-- ```{r results='hide'} -->
+<!-- png(here(plotFolder,"heatmap_grouped_col.png"),width=500, height=700) -->
+<!-- heatmap.2(Xheat, -->
+<!--           # Colv=FALSE, -->
+<!--           trace="none", -->
+<!--           col = cols_heatmap, -->
+<!--           labRow=FALSE, -->
+<!--           main = "Heatmap of Scaled Data", -->
+<!--           RowSideColors = Comm.colors , -->
+<!--           key.title = "Color Key\n& Histogram", -->
+<!--           key.xlab=NA, -->
+<!--           keysize=2, -->
+<!--           lhei = c(2,17), -->
+<!--           lwid = c(2, 7), -->
+<!--           breaks=qq -->
+<!--           ) -->
+<!-- legend(y=1.05, x=.12, xpd=TRUE, -->
+<!--     legend = c("ICU_Dealth","Not ICU_Dealth"), -->
+<!--     col = c("#F8766D", "#00BFC4"), -->
+<!--     lty= 1, -->
+<!--     lwd = 5, -->
+<!--     cex=.7 -->
+<!-- ) -->
+<!-- dev.off() -->
+
+<!-- ``` -->
+
+<!-- ![](images/EDA/heatmap_grouped_col.png) -->
+
+<!-- #### ICU death vs not ICU death -->
+
+<!-- ```{r results='hide'} -->
+<!-- png(here(plotFolder,"heatmap_grouped_col_1.png"),width=500, height=700) -->
+<!-- heatmap.2(Xheat_1, -->
+<!--           # Colv=FALSE, -->
+<!--           trace="none", -->
+<!--           col = cols_heatmap, -->
+<!--           labRow=FALSE, -->
+<!--           main = "Heatmap of Scaled Data", -->
+<!--           RowSideColors = Comm.colors1, -->
+<!--           key.title = "Color Key\n& Histogram", -->
+<!--           key.xlab=NA, -->
+<!--           keysize=2, -->
+<!--           lhei = c(2,17), -->
+<!--           lwid = c(2, 7), -->
+<!--           breaks=qq -->
+<!--           ) -->
+<!-- legend(y=1.05, x=.12, xpd=TRUE, -->
+<!--     legend = c("ICU_Dealth","Not ICU_Dealth"), -->
+<!--     col = c("#F8766D", "#00BFC4"), -->
+<!--     lty= 1, -->
+<!--     lwd = 5, -->
+<!--     cex=.7 -->
+<!-- ) -->
+<!-- dev.off() -->
+
+
+<!-- png(here(plotFolder,"heatmap_grouped_col_0.png"),width=500, height=700) -->
+<!-- heatmap.2(Xheat_0, -->
+<!--           # Colv=FALSE, -->
+<!--           trace="none", -->
+<!--           col = cols_heatmap, -->
+<!--           labRow=FALSE, -->
+<!--           main = "Heatmap of Scaled Data", -->
+<!--           RowSideColors = Comm.colors0, -->
+<!--           key.title = "Color Key\n& Histogram", -->
+<!--           key.xlab=NA, -->
+<!--           keysize=2, -->
+<!--           lhei = c(2,17), -->
+<!--           lwid = c(2, 7), -->
+<!--           breaks=qq -->
+<!--           ) -->
+<!-- legend(y=1.05, x=.12, xpd=TRUE, -->
+<!--     legend = c("ICU_Dealth","Not ICU_Dealth"), -->
+<!--     col = c("#F8766D", "#00BFC4"), -->
+<!--     lty= 1, -->
+<!--     lwd = 5, -->
+<!--     cex=.7 -->
+<!-- ) -->
+<!-- dev.off() -->
+
+<!-- ``` -->
+
+<!-- ```{r, echo=FALSE,out.width="49%", out.height="20%", fig.cap=" ", fig.show='hold',fig.align='center'} -->
+<!-- knitr::include_graphics(c(here(plotFolder,"heatmap_grouped_col_1.png"),here(plotFolder,"heatmap_grouped_col_0.png"))) -->
+<!-- ``` -->
+
+
+

@@ -1,0 +1,1801 @@
+---
+title: "Merge Raw Datasets and Select Columns"
+author: "Seraphina Shi"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r load_lib, include = FALSE, warning=FALSE, message=FALSE, echo=FALSE}
+# install.packages(c("knitr", "lubridate", "dplyr", "stringr", "tidyr", "R.utils", "data.table",
+#                   "ggplot2", "cowplot", "grid", "gridExtra", "gtsummary", "reshape2", "here"))
+
+# setwd("/home/seraphinashi/MissingDataInTheICU")
+
+library(lubridate)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(R.utils)
+library(data.table)
+library(ggplot2)
+library(cowplot)
+library(grid)
+library(gridExtra)
+library(gtsummary)
+library(reshape2)
+library(here)
+library(parallel)
+```
+
+```{r setup, include = FALSE}
+# description:
+# https://mimic.mit.edu/iv/datasets/core/
+
+plotFolder <- here("results","images", "v2", "DataPreprocessing")
+if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
+
+dataFolder <- here("data", "data_v2", "DataPreprocessing")
+if(!file.exists(dataFolder)) dir.create(dataFolder,recursive=TRUE)
+
+rdataFolder <- here("data", "data_v2", "rdata")
+if(!file.exists(rdataFolder)) dir.create(rdataFolder,recursive=TRUE)
+
+
+knitr::opts_chunk$set(
+  cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=FALSE,
+  results = 'markup', dev='png', dpi=150, fig.align = "center", fig.path=plotFolder,
+  cache.path=".cache/",
+  duplicate.label="allow"
+)
+
+```
+
+
+
+# get outcome
+```{r get_outcome}
+ADMISSIONS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "ADMISSIONS.csv")) %>% 
+  select(SUBJECT_ID, HADM_ID, DEATHTIME)
+PATIENTS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "PATIENTS.csv")) %>% 
+  select(SUBJECT_ID, DOD_SSN)
+ICUSTAYS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "ICUSTAYS.csv")) %>% 
+  select(SUBJECT_ID, HADM_ID, ICUSTAY_ID, INTIME, OUTTIME)
+
+df_Y <- ADMISSIONS %>% 
+  merge(PATIENTS, by = "SUBJECT_ID", all = T) %>%
+  merge(ICUSTAYS, by = c("SUBJECT_ID", "HADM_ID"), all = T) %>%
+  unique()
+
+df_Y$DOD_SSN[is.na(df_Y$DOD_SSN)] = df_Y$DEATHTIME[is.na(df_Y$DOD_SSN)]
+df_Y$DEATHTIME[df_Y$DEATHTIME == ""] =  df_Y$DOD_SSN[df_Y$DEATHTIME == ""]
+
+
+
+
+
+
+get_outcome_t <- function(half_day, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day){
+  outcome = ifelse(ICU_length_half_day == half_day, 
+                     ifelse(DISCHARGE_AFTER_ICUS_IN_half_day == half_day, "2", "1"), 
+                     ifelse(ICU_length_half_day > half_day, "0", "Gone"))
+  return(outcome)
+}
+
+
+
+df_Y <- df_Y %>% 
+  mutate(INTIME =  ymd_hms(INTIME),
+         OUTTIME = ymd_hms(OUTTIME),
+         DEATHTIME = ymd_hms(DEATHTIME),
+         DISCHARGE_AFTER_ICUS_IN_half_day = ceiling(as.numeric(difftime(OUTTIME, INTIME))/(60*60*12)),
+         DEATH_AFTER_ICUS_IN_half_day =  ceiling(as.numeric(difftime(DEATHTIME, INTIME))/(60*12))
+         ) 
+
+df_Y <- df_Y %>% rowwise() %>%
+  mutate(ICU_length_half_day = min(c(DISCHARGE_AFTER_ICUS_IN_half_day, DEATH_AFTER_ICUS_IN_half_day), na.rm = T)) 
+
+table(df_Y$ICU_length_half_day <= 0)
+cat("Total of 62722 ICU stays, 96 of them are removed due to the death date is prior to the ICU in-time.")
+
+df_Y <- df_Y %>% filter(ICU_length_half_day > 0)
+
+df_Y <- df_Y %>%
+  mutate(halfday.1 = mapply(get_outcome_t, 1, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day),
+         halfday.2 = mapply(get_outcome_t, 2, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day),
+         halfday.3 = mapply(get_outcome_t, 3, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day),
+         halfday.4 = mapply(get_outcome_t, 4, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day),
+         halfday.5 = mapply(get_outcome_t, 5, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day),
+         halfday.6 = mapply(get_outcome_t, 6, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day),
+         halfday.7 = mapply(get_outcome_t, 7, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day),
+         halfday.8 = mapply(get_outcome_t, 8, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day),
+         halfday.9 = mapply(get_outcome_t, 9, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day),
+         halfday.10 = mapply(get_outcome_t, 10, ICU_length_half_day, DISCHARGE_AFTER_ICUS_IN_half_day)) 
+
+df_Y <- df_Y %>%
+  select(-c(DOD_SSN, DEATHTIME, DISCHARGE_AFTER_ICUS_IN_half_day,DEATH_AFTER_ICUS_IN_half_day)) %>%
+  as.data.frame()
+
+df_Y <- df_Y %>% 
+  melt(id.vars = c("SUBJECT_ID", "HADM_ID", "ICUSTAY_ID", "INTIME", "OUTTIME")) %>% 
+  unique() %>% 
+  rename(half_day = variable, 
+         Y_t = value) %>%
+  mutate(half_day = as.integer(gsub("halfday.","",half_day))) %>% 
+  group_by(ICUSTAY_ID, SUBJECT_ID, HADM_ID, INTIME, OUTTIME) %>%
+  mutate("Y_t_plus_1" = lead(Y_t))
+
+
+df_Y <- df_Y %>%
+  filter(!is.na(half_day)) %>%
+  filter(Y_t != "Gone")
+
+write.csv(df_Y, file=here(dataFolder, "df_Y.csv"))
+```
+
+
+# 1. Get patients' characteristics
+```{r getPatientAge}
+#####
+# Get admit time
+#####
+ADMISSIONS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "ADMISSIONS.csv"))
+
+# convert the type of column ADMITTIME to time
+ADMISSIONS <- ADMISSIONS %>% mutate(ADMITTIME = ymd_hms(ADMITTIME),
+                                    DISCHTIME = ymd_hms(DISCHTIME),
+                                    DEATHTIME = ymd_hms(DEATHTIME)) %>% select(-ROW_ID)
+
+
+# order according to SUBJECT_ID and ADMITTIME
+ADMISSIONS <- ADMISSIONS[order(ADMISSIONS$SUBJECT_ID, ADMISSIONS$ADMITTIME),]
+
+ADMISSIONS <- ADMISSIONS %>% group_by(SUBJECT_ID) %>% mutate(num_admisstions = row_number(),
+                                                             t_num_admisstions = max(num_admisstions))
+
+
+
+#####
+# Get encrypted DOB
+#####
+PATIENTS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "PATIENTS.csv"))
+
+PATIENTS <- PATIENTS %>% mutate(DOB = ymd_hms(DOB),
+                                DOD = ymd_hms(DOD)) %>% select(SUBJECT_ID, GENDER, DOB, DOD)
+
+
+df <- merge(PATIENTS, 
+            ADMISSIONS,  
+            by="SUBJECT_ID", all=T)
+
+rm(PATIENTS, ADMISSIONS)
+```
+
+## Baseline covariates summary
+```{r Baseline}
+# library(gtsummary)
+
+NA_filling <- c("", " ", "NOT SPECIFIED", "UNOBTAINABLE", "UNKNOWN (DEFAULT)", "PATIENT DECLINED TO ANSWER", "UNABLE TO OBTAIN", "UNKNOWN/NOT SPECIFIED")
+
+df$LANGUAGE[df$LANGUAGE == ""] <- NA
+df$RELIGION[df$RELIGION %in% NA_filling] <- NA
+df$MARITAL_STATUS[df$MARITAL_STATUS %in% NA_filling] <- NA
+df$ETHNICITY[df$ETHNICITY %in% NA_filling] <- NA
+
+options("scipen"=100, "digits"=4)
+df <- df %>% mutate(AGE = round(as.numeric(difftime(ADMITTIME, DOB))/(60*60*24*365.242), digits = 0 ) )
+```
+
+
+```{r}
+df %>% select(GENDER, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, LANGUAGE) %>% 
+  tbl_summary(statistic=list(all_continuous() ~ "{mean} ({sd})", 
+                             all_categorical() ~ "{n} / {N} ({p}%)"),
+              missing_text = "(Missing)")
+
+```
+
+
+```{r age_original}
+png(here(plotFolder, "age_dist_0.png"),width=400, height=300)
+hist(df$AGE, main = sprintf("Age distribution of all %s patients", length(unique(df$SUBJECT_ID))))
+dev.off()
+```
+
+
+***AGE: 300 ==> 100***
+Patients with ages over 89 are shifted and appears to be 300 in the database during the disidentification process. However, since 300 is far away from 18 to 88, we decided to change 300 into 100.
+```{r age_updated}
+df$AGE[df$AGE > 200] <- 100
+
+png(here(plotFolder, "age_dist_1.png"),width=400, height=300)
+hist(df$AGE, main = sprintf("Age distribution of all %s patients", length(unique(df$SUBJECT_ID))))
+dev.off()
+```
+
+# 2. Get ICU stays info 
+```{r getICUstayTime}
+ICUSTAYS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "ICUSTAYS.csv"))
+
+ICUSTAYS <- ICUSTAYS %>% 
+  mutate(INTIME =  ymd_hms(INTIME),
+         OUTTIME = ymd_hms(OUTTIME),
+         ICUSTAY_LENGTH_h = round(as.numeric(difftime(OUTTIME, INTIME))/(60*60), 2)) %>% 
+  select(-ROW_ID)
+
+df1 <- merge(df, 
+            ICUSTAYS[colnames(ICUSTAYS)!="ROW_ID"],  
+            by=c("SUBJECT_ID", "HADM_ID"), all=T)
+
+df1 <- df1 %>% mutate(ICU_DEATH = as.Date(OUTTIME)==as.Date(DOD),
+                      ICU_DEATH = ifelse(is.na(ICU_DEATH), FALSE, ICU_DEATH))
+
+rm(ICUSTAYS)
+```
+
+## Tables for number of admissions and number of ICU stays
+
+Total number of admissions for each patient:
+```{r}
+table(df1$t_num_admisstions)
+```
+
+Total number of ICU stays for each patient:
+```{r}
+df_tmp <- df1 %>% 
+  select(SUBJECT_ID, HADM_ID, ICUSTAY_ID) %>%
+  unique() %>%
+  group_by(SUBJECT_ID) %>%
+  mutate(t_num_ICU = sum(!is.na(ICUSTAY_ID)))
+
+table(df_tmp$t_num_ICU)
+```
+
+Number of ICU stays for each admission:
+```{r}
+df_tmp <- df1 %>% 
+  select(HADM_ID, ICUSTAY_ID) %>%
+  unique() %>%
+  group_by(HADM_ID) %>%
+  mutate(t_num_ICU = sum(!is.na(ICUSTAY_ID)))
+
+table(df_tmp$t_num_ICU)
+```
+
+Number of ICU stays in the first admission for each patient
+```{r}
+df_tmp <- df1 %>% 
+  filter(num_admisstions == 1) %>%
+  select(SUBJECT_ID, HADM_ID, ICUSTAY_ID) %>%
+  unique() %>%
+  group_by(SUBJECT_ID) %>%
+  mutate(t_num_ICU = sum(!is.na(ICUSTAY_ID)))
+
+table(df_tmp$t_num_ICU)
+```
+
+```{r}
+rm(df_tmp)
+```
+
+## Get diagnoses
+```{r getDiagnoses}
+DIAGNOSES_ICD <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "DIAGNOSES_ICD.csv"))
+# D_ICD_DIAGNOSES <- read.csv("mimic-iii-clinical-database-1.4/D_ICD_DIAGNOSES.csv")
+
+df2 <- DIAGNOSES_ICD %>% 
+  select(SUBJECT_ID, HADM_ID, ICD9_CODE) %>%
+  merge(df1, by=c("SUBJECT_ID", "HADM_ID"), all=T) %>% 
+  group_by("SUBJECT_ID", "HADM_ID") 
+
+rm(DIAGNOSES_ICD)
+```
+
+# 3. Population Selection
+  
+**What was done in our study**:  
+
+* All ICU stays of the first admissions of all ICU patients satisfying following criteria: 
+  - adults (aged >18 years); 
+  - not admitted to the ICU during pregnancy, childbirth, or puerperium;  
+  - stayed in the ICU more than 24 hours;
+
+
+## Keep the first admission of all patients
+Although the paper that we are trying to reproduce only keep the patients with one admissions, to avoid biases, we decided to include all patients and only use their first admission data. 
+
+Note that there are many admissions that had more than one ICU stays and we kept all of their ICU stays and treat each ICU stay as one observation.
+```{r}
+cat(sprintf("Out of total %s admissions of %s patients, ", length(unique(df2$HADM_ID)), length(unique(df2$SUBJECT_ID))))
+
+df2 <- df2 %>% filter(num_admisstions == 1)
+
+cat(sprintf("we kept %s admissions that are these patients' first admission.", length(unique(df2$HADM_ID))))
+```
+
+## Keep Adults
+```{r}
+cat(sprintf("Out of total %s patients, ", length(unique(df2$SUBJECT_ID))))
+
+df2 <- df2 %>% filter(AGE > 18)
+
+cat(sprintf("we kept %s adults.", length(unique(df2$SUBJECT_ID))))
+```
+
+## Keep non-pregnant patients
+```{r}
+cat(sprintf("Out of total %s adult patients, ",  length(unique(df2$SUBJECT_ID))))
+
+df2 <- df2 %>% filter(!str_detect(DIAGNOSIS, "PREG"))
+
+cat(sprintf("we kept %s non-pregnant adults.",  length(unique(df2$SUBJECT_ID))))
+```
+
+## Keep patients stayed in the ICU more than 24 hours
+```{r}
+
+# cat(sprintf("Out of total %s non-pregnant adult patients, ",
+#             length(unique(df2$SUBJECT_ID))))
+# 
+# df2 <- df2 %>% filter(ICUSTAY_LENGTH_h >= 24)
+# 
+# cat(sprintf("we kept %s patients who stayed in the ICU more than 24 hours.", length(unique(df2$SUBJECT_ID))))
+```
+
+## Keep patients with an a-line (at least one arterial line)
+```{r}
+cat(sprintf("Out of total %s non-pregnant adult patients who stayed in the ICU more than 24 hours, ", 
+            length(unique(df2$SUBJECT_ID))))
+
+#--------------------------------------------------------------------------------------------------------------------
+D_ITEM_A_LINE <- c(1449, 51, 52, 53, 776, 777, 778, 779, 780, 2529, 8368, 8555, 6590, 6701, 6702, 6926, 6927, 
+                   225210, 225556, 227292, 225575, 224289, 224291, 227543, 227546, 227547, 225698, 225722, 225737
+                   , 225752, 226008, 228022, 228023, 228026, 225986, 226107, 220050, 220051, 220052, 220056, 220058, 
+                   220224, 220227, 220235, 224828, 223830)
+
+# nrow_CHARTEVENTS <- length(count.fields("mimic-iii-clinical-database-1.4/CHARTEVENTS.csv", sep = ",")) # 330712485
+nrow_CHARTEVENTS <- 330712485
+chunk_size <- (nrow_CHARTEVENTS - 1)/20 # 16535624
+
+
+# read in the data 
+CHARTEVENTS_i <- fread(here("data","raw_data","mimic-iii-clinical-database-1.4", "CHARTEVENTS.csv"),
+                                header = T, nrows = chunk_size, stringsAsFactors = FALSE)
+
+col_names_CHARTEVENTS <- colnames(CHARTEVENTS_i)
+CHARTEVENTS_i <- CHARTEVENTS_i  %>% 
+  select(SUBJECT_ID, HADM_ID, ICUSTAY_ID, ITEMID, VALUENUM) %>%
+  filter(ITEMID %in% D_ITEM_A_LINE, 
+         !is.na(VALUENUM), 
+         VALUENUM != 0,
+         !is.na(ICUSTAY_ID)) %>% 
+  select(ICUSTAY_ID) %>% 
+  unique()
+
+ICUSTAY_ID_A_Line <- CHARTEVENTS_i$ICUSTAY_ID
+  
+
+
+for (i in 2:20){
+  skip_rows = chunk_size * (i-1)
+  CHARTEVENTS_i = fread(here("data","raw_data","mimic-iii-clinical-database-1.4", "CHARTEVENTS.csv"), 
+                                 header = F, nrows = chunk_size, stringsAsFactors = FALSE, 
+                                 skip = skip_rows+1)
+  colnames(CHARTEVENTS_i) = col_names_CHARTEVENTS
+  CHARTEVENTS_i <- CHARTEVENTS_i  %>% 
+    select(SUBJECT_ID, HADM_ID, ICUSTAY_ID, ITEMID, VALUENUM) %>%
+    filter(ITEMID %in% D_ITEM_A_LINE, 
+           !is.na(VALUENUM), 
+           VALUENUM != 0,
+           !is.na(ICUSTAY_ID)) %>% 
+    select(ICUSTAY_ID) %>% 
+    unique()
+  ICUSTAY_ID_A_Line <- c(ICUSTAY_ID_A_Line, CHARTEVENTS_i$ICUSTAY_ID)
+}
+
+
+ICUSTAY_ID_A_Line <- unique(ICUSTAY_ID_A_Line)
+length(ICUSTAY_ID_A_Line)
+
+rm(CHARTEVENTS_i, col_names_CHARTEVENTS, chunk_size, D_ITEM_A_LINE, i, nrow_CHARTEVENTS, skip_rows)
+save.image(file = here(rdataFolder, "00_0_ICUSTAY_ID_A_Line.RData"))
+#--------------------------------------------------------------------------------------------------------------------
+# load(here(rdataFolder, "ICUSTAY_ID_A_Line.RData"))
+#--------------------------------------------------------------------------------------------------------------------
+
+
+df2 <- df2 %>% filter(ICUSTAY_ID %in% ICUSTAY_ID_A_Line)
+
+cat(sprintf("we kept %s patients who have an a-line.", length(unique(df2$SUBJECT_ID))))
+
+```
+
+
+
+```{r}
+adm_ids <- unique(df2$HADM_ID)
+adm_ids <- adm_ids[adm_ids %in% df_Y$HADM_ID]
+all_adm_id <- data.frame(id = adm_ids) 
+
+df2 <- unique(df2)
+```
+
+# Random sample 500 patients to run locally
+```{r}
+#========================================================================
+get_subsample <- F
+
+if(get_subsample){
+  set.seed(252)
+
+  # random sample 500 patients/admissions 
+  # random_sample_n = 500
+  # all_adm_id <- data.frame(id = all_adm_id$id[sample(nrow(all_adm_id), random_sample_n, replace = F)])
+  
+  
+  df_Y_tmp <- df_Y[(df_Y$HADM_ID %in% df2$HADM_ID) & (df_Y$ICUSTAY_ID %in% df2$ICUSTAY_ID),] 
+  
+  all_adm_id_y1 <- unique(df_Y_tmp$HADM_ID[df_Y_tmp$Y_t_plus_1 == 1])
+  all_adm_id_y0 <- unique(df_Y_tmp$HADM_ID[df_Y_tmp$Y_t_plus_1 == 0])
+  sprintf("Among all %s admissions, %s admissions with ICU fatality, we randomly pick 300 admissions with ICU fatality and 200 admissions without ICU fatality to run codes locally.", nrow(all_adm_id), length(all_adm_id_y1))
+  
+  all_adm_id <- data.frame(id = c(all_adm_id_y1[sample(length(all_adm_id_y1), 300, replace = F)], all_adm_id_y0[sample(length(all_adm_id_y0), 200, replace = F)]))
+  
+  
+  df2 <- df2 %>% filter(HADM_ID %in% all_adm_id$id) %>% unique()
+}
+#========================================================================
+
+```
+
+```{r}
+write.csv(all_adm_id, file=here(dataFolder, "all_adm_id.csv"))
+
+rm(df, df1)
+```
+
+
+# 4. Create missingness indicators for baseline covariates
+```{r missing_indicator}
+get_missing_indicator_chara <- function(df, var_name){
+  mis_var <- paste0("n_", var_name)
+  df[[mis_var]] <- as.numeric(! (is.na(df[[var_name]]) | df[[var_name]] %in% c("", "NOT SPECIFIED", "UNKNOWN (DEFAULT)", "UNABLE TO OBTAIN", "UNKNOWN/NOT SPECIFIED") ))
+  return(df)
+}
+
+df_baseline <- unique(df2[,c("SUBJECT_ID", "HADM_ID", "ICUSTAY_ID",  "GENDER", "AGE", "INSURANCE", "LANGUAGE", "RELIGION", "MARITAL_STATUS", "ETHNICITY")])
+for (var in c("GENDER","AGE","INSURANCE","LANGUAGE","RELIGION","MARITAL_STATUS","ETHNICITY")) {
+  df_baseline <- get_missing_indicator_chara(df_baseline, var)
+}
+
+
+df2 <- unique(df2[,c("ICUSTAY_ID", "SUBJECT_ID", "HADM_ID", "INTIME","OUTTIME")])
+```
+
+
+```{r counts_baseline, fig.height=3, fig.width= 4}
+df_tmp <- gather(df_baseline, baseline, counts, n_GENDER:n_ETHNICITY , factor_key=TRUE)
+df_tmp$counts = as.factor(df_tmp$counts)  
+df_tmp$baseline = gsub("n_", "", df_tmp$baseline)  
+
+ggplot(df_tmp) + 
+  geom_bar(aes(x = baseline, fill = counts)) + 
+  labs(title = "Counts of each baseline covariate", x = "Baseline") +
+  theme(plot.title = element_text(hjust=0.5),
+        axis.text.x = element_text(angle = 45,  hjust=1)) 
+
+ggsave(here(plotFolder, "baseline_counts.png"), width = 4, height = 3, dpi = 1200)
+```
+
+
+
+# 5. Get Vital signs
+## Select vital signs (items)
+```{r get_items}
+D_ITEMS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "D_ITEMS.csv"))
+
+vital_signs <- c("Heart Rate", 
+                 "Temperature Celsius",
+                 "Temperature Fahrenheit",
+                 "Temperature F",
+                 "Temperature C",
+                 "Respiratory Rate", 
+                 "Respiratory Rate Set",
+                 "Respiratory Rate (Set)",
+                 "Respiratory Rate (Total)",
+                 "Respiratory Rate (spontaneous)",
+                 "O2 saturation pulseoxymetry", 
+                 "SpO2")
+
+bpm_itemid <- c(52, 443, 456, 1449, 3312, 3314, 3316, 3318, 3320, 3322, 6702, 220052, 220181, 225312)
+bps_itemid <- c(6, 51, 442, 455, 3313, 3315, 3317, 3319, 3321, 3323, 6701, 220050, 220179, 224167, 225309, 227243)
+bpd_itemid <- c(155, 8364, 8368, 8440, 8441, 8502, 8503, 8504, 8505, 8506, 8507, 8555, 220051, 220180, 224643, 225310, 227242)
+
+GCS_Eye_itemid <- 220739
+GCS_Verbal_itemid <- 223900
+GCS_Motor_itemid <- 223901
+GCS_Total_itemid <- 198
+
+D_ITEMS_vital_sub <- D_ITEMS %>% 
+  filter(LABEL %in% vital_signs | ITEMID %in% c(bpm_itemid, bps_itemid, bpd_itemid, GCS_Eye_itemid, GCS_Verbal_itemid, GCS_Motor_itemid, GCS_Total_itemid) ) %>% 
+  select(ITEMID, LABEL, ABBREVIATION, UNITNAME) 
+
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$LABEL == "SpO2"] = "SpO2"
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$LABEL == "Heart Rate"] = "HR"
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$LABEL %in% c("Temperature Celsius", "Temperature C")] = "TempC"
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$LABEL %in% c("Temperature Fahrenheit", "Temperature F")] = "TempF"
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$LABEL %in% c("Respiratory Rate","Respiratory Rate Set","Respiratory Rate (Set)","Respiratory Rate (Total)","Respiratory Rate (spontaneous)")] = "RR"
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$ITEMID %in% bpd_itemid] = "BPd"
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$ITEMID %in% bps_itemid] = "BPs"
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$ITEMID %in% bpm_itemid] = "BPm"
+
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$ITEMID %in% GCS_Eye_itemid] = "GCS_Eye"
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$ITEMID %in% GCS_Verbal_itemid] = "GCS_Verbal"
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$ITEMID %in% GCS_Motor_itemid] = "GCS_Motor"
+D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$ITEMID %in% GCS_Total_itemid] = "GCS_Total"
+
+# D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$LABEL == "Bladder Pressure"] = "BladderP"
+# D_ITEMS_vital_sub$ABBREVIATION[D_ITEMS_vital_sub$LABEL == "QTc"] = "QTc"
+```
+
+
+Items selected for this study:
+```{r}
+D_ITEMS_vital_sub <- D_ITEMS_vital_sub %>% arrange(ABBREVIATION)
+print(D_ITEMS_vital_sub)
+write.csv(D_ITEMS_vital_sub, file=here(dataFolder, "D_ITEMS_sub_0.csv"))
+rm(D_ITEMS)
+```
+
+## Load Chartevents (records) of the selected items
+```{r loadChartevents}
+# source(here("scripts", "scripts_v2", '00_loadChartevents.R'))
+# load(here(rdataFolder, "LoadCHARTEVENTS_lists_all.RData"))
+
+CHARTEVENTS <- fread(here("data","raw_data","mimic-iii-clinical-database-1.4", "CHARTEVENTS.csv"), header = T, stringsAsFactors = FALSE)
+
+
+CHARTEVENTS <- CHARTEVENTS %>% 
+  filter(HADM_ID %in% all_adm_id$id) %>%
+  select(ROW_ID, ICUSTAY_ID, ITEMID, CHARTTIME, VALUENUM, VALUEUOM, ERROR)  %>% 
+  filter(ITEMID %in% D_ITEMS_vital_sub$ITEMID) %>%
+  filter(!is.na(VALUENUM)) %>% 
+  filter(VALUENUM != 0) %>%
+  mutate(CHARTTIME  = ymd_hms(CHARTTIME))
+
+CHARTEVENTS <- unique(CHARTEVENTS)
+
+save.image(file=here(rdataFolder, "00_1_LoadCHARTEVENTS_lists_all.RData"))
+```
+
+
+
+```{r cleanChartevents}
+CHARTEVENTS_cleaned <- merge(CHARTEVENTS, D_ITEMS_vital_sub[,c("ITEMID","ABBREVIATION")], by=c("ITEMID") )
+CHARTEVENTS_cleaned$ABBREVIATION[CHARTEVENTS_cleaned$ABBREVIATION == "TempF" & CHARTEVENTS_cleaned$VALUENUM < 38] = "TempC"
+CHARTEVENTS_cleaned$ABBREVIATION[CHARTEVENTS_cleaned$ABBREVIATION == "TempC" & CHARTEVENTS_cleaned$VALUENUM > 90] = "TempF"
+CHARTEVENTS_cleaned$VALUENUM[CHARTEVENTS_cleaned$ABBREVIATION == "TempF"] = round((CHARTEVENTS_cleaned$VALUENUM[CHARTEVENTS_cleaned$ABBREVIATION == "TempF"] - 32)*5/9,2)
+CHARTEVENTS_cleaned$ABBREVIATION[CHARTEVENTS_cleaned$ABBREVIATION == "TempF"] = "TempC"
+
+CHARTEVENTS_cleaned <- CHARTEVENTS_cleaned  %>% 
+    mutate(CHARTTIME  = ymd_hms(CHARTTIME)) %>% 
+    group_by(ICUSTAY_ID, ABBREVIATION) %>% 
+    arrange(CHARTTIME) %>%
+    mutate(n_vital =  row_number()) %>% 
+    # filter(n_vital == 1) %>% 
+    ungroup() # %>% 
+    # select(-c(n_vital))
+
+items_vital <- sort(unique(CHARTEVENTS_cleaned$ABBREVIATION), decreasing = T)
+rm(CHARTEVENTS)
+```
+
+
+
+## Keep records recorded within the first 5 days of the ICU stay 
+Since some records are recorded more than a week later since the ICU intime, so we decided to limit the records within 5 days since the ICU intime.
+```{r CHARTEVENTS_cleaned_5days}
+num_splits= 20
+rows_per_split <- ceiling(nrow(CHARTEVENTS_cleaned) / num_splits)
+CHARTEVENTS_cleaned_l <- split(CHARTEVENTS_cleaned, rep(1:num_splits, each = rows_per_split, length.out = nrow(df)))
+
+
+df_icu_time <- df2[,c("ICUSTAY_ID","INTIME","OUTTIME")]
+
+CHARTEVENTS_cleaned_l_1 <- list()
+for(i in 1:num_splits){
+  CHARTEVENTS_cleaned_i <- CHARTEVENTS_cleaned_l[[i]]
+  
+  CHARTEVENTS_cleaned_i <- CHARTEVENTS_cleaned_i%>%
+    merge(df_icu_time, by="ICUSTAY_ID", all = T, allow.cartesian=TRUE)  %>%
+    filter(!is.na(ITEMID)) %>%
+    filter(ICUSTAY_ID %in% df_icu_time$ICUSTAY_ID) %>%
+    unique()
+
+  CHARTEVENTS_cleaned_i <- CHARTEVENTS_cleaned_i %>%
+      mutate(INTIME =  ymd_hms(INTIME),
+             CHARTTIME =  ymd_hms(CHARTTIME),
+             Chartime_after_ICUin = as.numeric(difftime(CHARTTIME, INTIME)))
+           
+  CHARTEVENTS_cleaned_i <- CHARTEVENTS_cleaned_i %>%
+      mutate(Chartime_after_ICUin_hours = Chartime_after_ICUin/(60*60),
+             Chartime_after_ICUin_12hours = Chartime_after_ICUin_hours/12,
+             Chartime_after_ICUin_days = Chartime_after_ICUin_hours/24)  
+  
+  CHARTEVENTS_cleaned_l_1[[i]] <- CHARTEVENTS_cleaned_i
+}
+
+
+CHARTEVENTS_cleaned <- do.call("rbind", CHARTEVENTS_cleaned_l_1) %>% as.data.frame()  
+
+rm(CHARTEVENTS_cleaned_l, CHARTEVENTS_cleaned_l_1)
+```
+
+
+```{r save_image}
+save.image(file=here(rdataFolder, "00_2_CHARTEVENTS_cleaned_time.RData"))
+```
+
+```{r time_after_in_vital, fig.width=8, fig.height=8}
+# library(ggplot2)
+# library(grid)
+p1 <- ggplot(CHARTEVENTS_cleaned, aes(x=ABBREVIATION, y=Chartime_after_ICUin_days)) + 
+  geom_violin(trim=FALSE) + 
+  geom_boxplot(width=0.1, fill = "red", alpha = 0.6) +
+  labs(title = "All inital recordes", x = "", y = "Time in days") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+CHARTEVENTS_cleaned <- CHARTEVENTS_cleaned %>% 
+  filter(Chartime_after_ICUin_days >= 0) %>% 
+  filter(Chartime_after_ICUin_days < 5)
+
+p2 <- ggplot(CHARTEVENTS_cleaned, aes(x=ABBREVIATION, y=Chartime_after_ICUin_days)) + 
+  geom_violin(trim=FALSE) + 
+  geom_boxplot(width=0.1, fill = "red", alpha = 0.6) + 
+  labs(title = "After keeping the first 5 days", x = "", y = "Time in days") + 
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+gridExtra::grid.arrange(p1, p2, nrow = 2, top = textGrob("Violin plots of time between vital sign records recorded time and ICU in-time", gp=gpar(fontsize=15)))
+
+
+g <- arrangeGrob(p1, p2, nrow = 2, 
+                 top = textGrob("Violin plots of time between vital sign records recorded time and ICU in-time", 
+                                gp=gpar(fontsize=15))) #generates g
+ggsave(file=here(plotFolder,"time_after_in_vital.png"), g, width = 8, height = 8, dpi = 1200) #saves g
+
+```
+
+
+## Define Outliers
+
+In this study, we define an outlier as an observation that lies an abnormal clinical value or 3 standard deviations away from the observation mean.  
+
+**Vital Signs:**  
+The normal clinical value ranges of vital signs: 
+
+| Vital Sign | Abbreviation| Lower Bound | Upper Bound | Unit |
+|---------------------------|----------|-------------|-------------|------|
+|O2 saturation pulseoxymetry|SpO2|60|100| % |
+|Temperature Celsius|TempC| 28 | 42| C|
+|Respiratory Rate|RR|5|40| insp/min |
+|Heart Rate|HR|20|160| bpm |
+|Blood Pressure Systolic|BPs|40|250|mmHg|
+|Blood Pressure Diastolic|BPd|20|180|mmHg|
+|Blood Pressure Mean|BPm|30|210|mmHg|
+|Glasgow Coma Scale Eye|GCS_Eye|1|4|scale|
+|Glasgow Coma Scale Verbal|GCS_Verbal|1|5|scale|
+|Glasgow Coma Scale Motor|GCS_Motor|1|6|scale|
+|Glasgow Coma Scale Total|GCS_Total|3|15|scale|
+
+<!-- **Lab tests:**    -->
+<!-- Lower Bound: $\hat\mu - 3*\hat{sd}$     -->
+<!-- Upper Bound: $\hat\mu + 3*\hat{sd}$     -->
+
+
+```{r def_Outliers}
+get_mean <- function(abb){
+  records = CHARTEVENTS_cleaned$VALUENUM[CHARTEVENTS_cleaned$ABBREVIATION == abb]
+  return(mean(records))
+}
+
+get_sd <- function(abb){
+  records = CHARTEVENTS_cleaned$VALUENUM[CHARTEVENTS_cleaned$ABBREVIATION == abb]
+  return(sd(records))
+}
+
+get_median <- function(abb){
+  records = CHARTEVENTS_cleaned$VALUENUM[CHARTEVENTS_cleaned$ABBREVIATION == abb]
+  return(median(records))
+}
+
+get_min <- function(abb){
+  records = CHARTEVENTS_cleaned$VALUENUM[CHARTEVENTS_cleaned$ABBREVIATION == abb]
+  return(min(records))
+}
+
+get_max <- function(abb){
+  records = CHARTEVENTS_cleaned$VALUENUM[CHARTEVENTS_cleaned$ABBREVIATION == abb]
+  return(max(records))
+}
+
+outlier_range_vital <- data.frame(ABB = c("SpO2", "TempC", "RR", "HR", "BPs", "BPd", "BPm", "GCS_Eye", "GCS_Verbal", "GCS_Motor", "GCS_Total"),
+                                  min_clinical = c(60, 28, 5, 20, 40, 20, 30, 1, 1, 1, 3),
+                                  max_clinical = c(100, 42, 40, 160, 250, 180, 210, 4, 5, 6, 15),
+                                  min = sapply(c("SpO2", "TempC", "RR", "HR", "BPs", "BPd", "BPm", "GCS_Eye", "GCS_Verbal", "GCS_Motor", "GCS_Total"), get_min),
+                                  max = sapply(c("SpO2", "TempC", "RR", "HR", "BPs", "BPd", "BPm", "GCS_Eye", "GCS_Verbal", "GCS_Motor", "GCS_Total"), get_max),
+                                  mean = sapply(c("SpO2", "TempC", "RR", "HR", "BPs", "BPd", "BPm", "GCS_Eye", "GCS_Verbal", "GCS_Motor", "GCS_Total"), get_mean),
+                                  median = sapply(c("SpO2", "TempC", "RR", "HR", "BPs", "BPd", "BPm", "GCS_Eye", "GCS_Verbal", "GCS_Motor", "GCS_Total"), get_median), 
+                                  sd = sapply(c("SpO2", "TempC", "RR", "HR", "BPs", "BPd", "BPm", "GCS_Eye", "GCS_Verbal", "GCS_Motor", "GCS_Total"), get_sd) )
+
+is_outlier_vital <- function(val, abb){
+  is_outlier = (val > outlier_range_vital$max_clinical[outlier_range_vital$ABB == abb]) | (val < outlier_range_vital$min_clinical[outlier_range_vital$ABB == abb])
+  return(is_outlier)
+}
+```
+
+```{r}
+CHARTEVENTS_cleaned <- CHARTEVENTS_cleaned %>% 
+  mutate(day = ceiling(Chartime_after_ICUin_days),
+         half_day = ceiling(Chartime_after_ICUin_12hours),
+         hour = ceiling(Chartime_after_ICUin_hours) - 12*(half_day-1),
+         outlier = mapply(is_outlier_vital, VALUENUM, ABBREVIATION))
+```
+
+
+
+## Get number of hours missing vitals, vital measurement frequencies and outlier frequencies in each 12 hours for each ICU stay
+```{r}
+CHARTEVENTS_cleaned <- CHARTEVENTS_cleaned %>% 
+    group_by(ICUSTAY_ID, ABBREVIATION, half_day) %>%     
+    arrange(CHARTTIME) %>%
+    mutate(n_vital = row_number(),
+           n_outlier = sum(outlier),
+           n_hour_missing = 12 - length(unique(hour)),
+           VALUENUM_mean = mean(VALUENUM)) %>% 
+    filter(n_vital == max(n_vital),
+           day != 0) %>% 
+    ungroup()
+
+CHARTEVENTS_cleaned <- CHARTEVENTS_cleaned %>% 
+  select(ICUSTAY_ID, half_day, ABBREVIATION, n_hour_missing, n_vital, n_outlier, VALUENUM_mean) 
+```
+
+### Remove ICU_Stays with more than 100 records of at least one vital sign within 12 hours
+```{r }
+# Remove ICU_Stays with more than 100 records of at least one vital sign within 12 hours
+weird_obs_index <- (CHARTEVENTS_cleaned$n_vital > 100) 
+# print(CHARTEVENTS_cleaned[weird_obs_index,])
+weird_ICU_Stays <- unique(CHARTEVENTS_cleaned$ICUSTAY_ID[weird_obs_index])
+sprintf("Remove the following %s patients:", length(weird_ICU_Stays))
+print(weird_ICU_Stays)
+
+CHARTEVENTS_cleaned <- CHARTEVENTS_cleaned[! CHARTEVENTS_cleaned$ICUSTAY_ID %in% weird_ICU_Stays, ]
+```
+
+```{r }
+# save.image(file=here(rdataFolder, "before_CHARTEVENTS_cleaned_tmpl.RData"))
+
+CHARTEVENTS_cleaned_tmp <- CHARTEVENTS_cleaned %>% 
+  mutate(percent_outlier = 100 * n_outlier/n_vital,
+         percent_outlier = ifelse(percent_outlier == 0, "0",
+                                  ifelse(percent_outlier <= 10, "(0, 10]", 
+                                         ifelse(percent_outlier <= 20, "(10, 20]",
+                                                ifelse(percent_outlier <= 30, "(20, 30]",
+                                                       ifelse(percent_outlier <= 40, "(30, 40]",
+                                                              ifelse(percent_outlier <= 50, "(40, 50]",
+                                                                     ifelse(percent_outlier <= 60, "(50, 60]",
+                                                                            ifelse(percent_outlier <= 70, "(60, 70]",
+                                                                                   ifelse(percent_outlier <= 80, "(70, 80]",
+                                                                                          ifelse(percent_outlier <= 90, "(80, 90]",
+                                                                                                 ifelse(percent_outlier < 100, "(90, 100)", "100"))))))))))),
+         n_outlier = ifelse(n_outlier < 6, n_outlier, 
+                            ifelse(n_outlier < 11, "6-10", "> 10")),
+         n_vital = ifelse(6 <= n_vital & n_vital <= 10, "6-10", 
+                              ifelse(11 <= n_vital & n_vital <= 15, "11-15", 
+                                     ifelse(16 <= n_vital & n_vital <= 20, "16-20", 
+                                            ifelse(21 <= n_vital & n_vital <= 25, "21-25", 
+                                                   ifelse(26 <= n_vital & n_vital <= 30, "26-30", 
+                                                          ifelse(n_vital > 30, ">30", 
+                                                                 ifelse(3 <= n_vital & n_vital <= 5, "3-5",
+                                                                        n_vital))))))))
+
+
+tmp_day <- CHARTEVENTS_cleaned_tmp %>%
+  select(ICUSTAY_ID, half_day) %>%
+  unique()
+
+seq_function <- function(i){
+  return(1:i)
+}
+
+tmp_ICU_stays <- data.frame(ICUSTAY_ID=rep(tmp_day$ICUSTAY_ID, tmp_day$half_day),
+                            half_day = unlist(sapply(tmp_day$half_day, seq_function, simplify = T)))
+
+n_hour_missing_vital_half_day_col <- c(rainbow(12), "gray45")
+names(n_hour_missing_vital_half_day_col) <- as.character(12:0)
+
+n_vital_half_day_col <- c("gray45", rainbow(length(c(as.character(1:2), "3-5", "6-10", "11-15", "16-20", "21-25", "26-30", ">30"))))
+names(n_vital_half_day_col) <- c(as.character(0:2), "3-5", "6-10", "11-15", "16-20", "21-25", "26-30", ">30") 
+
+n_vital_outlier_half_day_col <- c("gray45", rainbow(length(c(as.character(1:5), "6-10", ">10"))))
+names(n_vital_outlier_half_day_col) <- c(as.character(0:5), "6-10", ">10") 
+
+percent_vital_outlier_half_day_col <- c("gray45", rainbow(length(c("(0, 10]", "(10, 20]", "(20, 30]", "(30, 40]", "(40, 50]", "(50, 60]", "(60, 70]", "(70, 80]", "(80, 90]", "(90, 100)", "100"))))
+names(percent_vital_outlier_half_day_col) <- c("0", "(0, 10]", "(10, 20]", "(20, 30]", "(30, 40]", "(40, 50]", "(50, 60]", "(60, 70]", "(70, 80]", "(80, 90]", "(90, 100)", "100") 
+
+# library(cowplot)
+```
+
+### Plot number of hours missing vitals each half dat
+```{r plot_num_hour_missing_vital_each_12h, fig.width=10, fig.height=6}
+for (i in 1:length(items_vital)) {
+  r = items_vital[i]
+  tmp0 <- CHARTEVENTS_cleaned_tmp[CHARTEVENTS_cleaned_tmp$ABBREVIATION == r, ] %>%
+    select(ICUSTAY_ID, half_day, n_hour_missing)
+  tmp <- merge(tmp_ICU_stays, tmp0, by=c("ICUSTAY_ID","half_day"), all.x =T, all.y = F) %>% unique()
+  tmp$n_hour_missing[is.na(tmp$n_hour_missing)] = 12
+  tmp$n_hour_missing = factor(tmp$n_hour_missing, levels = names(n_hour_missing_vital_half_day_col))
+  tmp = tmp %>% mutate(half_day = as.integer(half_day))
+  
+  pi <- ggplot(tmp, aes(x=half_day, fill=n_hour_missing)) +
+    geom_bar() +
+    labs(y="", x="", title=r ) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_fill_manual(values = n_hour_missing_vital_half_day_col)
+  
+  if(i %in% c(1,5,9)) {
+    pi <- pi + labs(y="Number of Patients", x="") 
+  } 
+  if(i %in% c(8, 9,10,11)) {
+    pi <- pi + labs(x="Half Day") 
+  } 
+  
+  leg <- get_legend(pi + guides(fill=guide_legend(ncol=2,byrow=FALSE)))
+  pi <- pi + theme(legend.position = "none")
+  
+  assign(paste0("p",i), pi)
+}
+
+gridExtra::grid.arrange(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, leg, 
+                        layout_matrix = rbind(c(1,2,3,4),
+                                              c(5,6,7,8),
+                                              c(9,10,11,12)),
+                        top = textGrob(paste("Number of Hours with Missing Vital Sign in Each Half Day"), gp=gpar(fontsize=18)))
+
+
+g <- arrangeGrob(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, leg, 
+                 layout_matrix = rbind(c(1,2,3,4),
+                                       c(5,6,7,8),
+                                       c(9,10,11,12)),
+                 top = textGrob(paste("Number of Hours with Missing Vital Sign in Each Half Day"), gp=gpar(fontsize=20)))
+ggsave(file=here(plotFolder, "plot_num_hour_missing_vital_each_12h.png"), g, width = 10, height = 6, dpi = 1200) #saves g
+
+```
+
+
+### Plot number of vitals each half day
+```{r plot_num_vital_each_12h, fig.width=10, fig.height=6}
+for (i in 1:length(items_vital)) {
+  r = items_vital[i]
+  tmp0 <- CHARTEVENTS_cleaned_tmp[CHARTEVENTS_cleaned_tmp$ABBREVIATION == r, ] %>%
+    select(ICUSTAY_ID, half_day, n_vital)
+  tmp <- merge(tmp_ICU_stays, tmp0, by=c("ICUSTAY_ID","half_day"), all.x =T, all.y = F) %>% unique()
+  tmp$n_vital[is.na(tmp$n_vital)] = 0
+  tmp$n_vital = factor(tmp$n_vital, levels = names(n_vital_half_day_col))
+  tmp = tmp %>% mutate(half_day = as.integer(half_day))
+  
+  pi <- ggplot(tmp, aes(x=half_day, fill=n_vital)) +
+    geom_bar() +
+    labs(y="", x="", title=r ) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_fill_manual(values = n_vital_half_day_col)
+  
+  if(i %in% c(1,5,9)) {
+    pi <- pi + labs(y="Number of Patients", x="") 
+  } 
+  if(i %in% c(8, 9,10,11)) {
+    pi <- pi + labs(x="Half Day") 
+  } 
+  
+  leg <- get_legend(pi + guides(fill=guide_legend(ncol=2,byrow=FALSE)))
+  pi <- pi + theme(legend.position = "none")
+  
+  assign(paste0("p",i), pi)
+}
+
+gridExtra::grid.arrange(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, leg, 
+                        layout_matrix = rbind(c(1,2,3,4),
+                                              c(5,6,7,8),
+                                              c(9,10,11,12)),
+                        top = textGrob(paste("Number of Vital Signs Recorded in Each Half Day"), gp=gpar(fontsize=20)))
+
+
+g <- arrangeGrob(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, leg, 
+                 layout_matrix = rbind(c(1,2,3,4),
+                                       c(5,6,7,8),
+                                       c(9,10,11,12)),
+                 top = textGrob(paste("Number of Vital Signs Recorded in Each Half Day"), gp=gpar(fontsize=20)))
+ggsave(file=here(plotFolder, "plot_num_vital_each_12h.png"), g, width = 10, height = 6, dpi = 1200) #saves g
+
+```
+
+### Plot number of outliers each half day
+```{r plot_num_vital_outlier_each_12h, fig.width=10, fig.height=6}
+for (i in 1:length(items_vital)) {
+  r = items_vital[i]
+  tmp0 <- CHARTEVENTS_cleaned_tmp[CHARTEVENTS_cleaned_tmp$ABBREVIATION == r, ] %>%
+    select(ICUSTAY_ID, half_day, n_outlier)
+  tmp <- merge(tmp_ICU_stays, tmp0, by=c("ICUSTAY_ID","half_day"), all.x =T, all.y = F) %>% unique()
+  tmp$n_outlier[is.na(tmp$n_outlier)] = 0
+  tmp$n_outlier = factor(tmp$n_outlier, levels = names(n_vital_outlier_half_day_col))
+  tmp = tmp %>% mutate(half_day = as.integer(half_day))
+  
+  pi <- ggplot(tmp, aes(x=half_day, fill=n_outlier)) +
+    geom_bar() +
+    labs(y="", x="", title=r ) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_fill_manual(values = n_vital_outlier_half_day_col)
+  
+  if(i %in% c(1,5,9)) {
+    pi <- pi + labs(y="Number of Patients", x="") 
+  } 
+  if(i %in% c(8,9,10,11)) {
+    pi <- pi + labs(x="Half Day") 
+  } 
+  
+  leg <- get_legend(pi + guides(fill=guide_legend(ncol=2,byrow=FALSE)))
+  pi <- pi + theme(legend.position = "none")
+  
+  assign(paste0("p",i), pi)
+}
+
+gridExtra::grid.arrange(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, leg, 
+                        layout_matrix = rbind(c(1,2,3,4),
+                                              c(5,6,7,8),
+                                              c(9,10,11,12)),
+                        top = textGrob(paste("Number of Outliers in Vital Signs Recorded in Each Half Day"), gp=gpar(fontsize=20)))
+
+g <- arrangeGrob(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, leg, 
+                 layout_matrix = rbind(c(1,2,3,4),
+                                       c(5,6,7,8),
+                                       c(9,10,11,12)),
+                 top = textGrob(paste("Number of Outliers in Vital Signs Recorded in Each Half Day"), gp=gpar(fontsize=20)))
+ggsave(file=here(plotFolder, "plot_num_vital_outlier_each_12h.png"), g, width = 10, height = 6, dpi = 1200) #saves g
+
+```
+
+
+### Plot percent of outliers each half day
+```{r plot_percent_vital_outlier_each_12h, fig.width=10, fig.height=6}
+for (i in 1:length(items_vital)) {
+  r = items_vital[i]
+  tmp0 <- CHARTEVENTS_cleaned_tmp[CHARTEVENTS_cleaned_tmp$ABBREVIATION == r, ] %>%
+    select(ICUSTAY_ID, half_day, percent_outlier)
+  tmp <- merge(tmp_ICU_stays, tmp0, by=c("ICUSTAY_ID","half_day"), all.x =T, all.y = F) %>% unique()
+  tmp$percent_outlier[is.na(tmp$percent_outlier)] = 0
+  tmp$percent_outlier = factor(tmp$percent_outlier, levels = names(percent_vital_outlier_half_day_col))
+  tmp = tmp %>% mutate(half_day = as.integer(half_day))
+  
+  pi <- ggplot(tmp, aes(x=half_day, fill=percent_outlier)) +
+    geom_bar() +
+    labs(y="", x="", title=r ) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_fill_manual(values = percent_vital_outlier_half_day_col)
+  
+  if(i %in% c(1,5,9)) {
+    pi <- pi + labs(y="Number of Patients", x="") 
+  } 
+  if(i %in% c(8,9,10,11)) {
+    pi <- pi + labs(x="Half Day") 
+  } 
+  
+  leg <- get_legend(pi + guides(fill=guide_legend(ncol=2,byrow=FALSE)))
+  pi <- pi + theme(legend.position = "none")
+  
+  assign(paste0("p",i), pi)
+}
+
+gridExtra::grid.arrange(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, leg, 
+                        layout_matrix = rbind(c(1,2,3,4),
+                                              c(5,6,7,8),
+                                              c(9,10,11,12)),
+                        top = textGrob(paste("Percent (%) of Outliers in Vital Signs Recorded in Each Half Day"), gp=gpar(fontsize=20)))
+
+g <- arrangeGrob(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, leg, 
+                 layout_matrix = rbind(c(1,2,3,4),
+                                       c(5,6,7,8),
+                                       c(9,10,11,12)),
+                 top = textGrob(paste("Percent (%) of Outliers in Vital Signs Recorded in Each Half Day"), gp=gpar(fontsize=20)))
+ggsave(file=here("plot_percent_vital_outlier_each_12h.png"), g, width = 10, height = 6, dpi = 1200) #saves g
+
+```
+
+```{r}
+rm(CHARTEVENTS_cleaned_tmp)
+```
+
+
+
+```{r}
+# library("reshape2")
+CHARTEVENTS_cleaned <- reshape(as.data.frame(CHARTEVENTS_cleaned),
+                               timevar = "ABBREVIATION",
+                               idvar = c("ICUSTAY_ID", "half_day"),
+                               v.names=c("n_hour_missing", "n_vital", "n_outlier", "VALUENUM_mean"),
+                               direction = "wide")
+
+
+
+colnames(CHARTEVENTS_cleaned) <- gsub("VALUENUM_mean.", "", colnames(CHARTEVENTS_cleaned))
+colnames(CHARTEVENTS_cleaned)[grepl("n_vital", colnames(CHARTEVENTS_cleaned))] = gsub("n_vital.", "n_", colnames(CHARTEVENTS_cleaned)[grepl("n_vital", colnames(CHARTEVENTS_cleaned))])
+colnames(CHARTEVENTS_cleaned)[grepl("n_outlier", colnames(CHARTEVENTS_cleaned))] = gsub("n_outlier.", "n_o_", colnames(CHARTEVENTS_cleaned)[grepl("n_outlier", colnames(CHARTEVENTS_cleaned))])
+colnames(CHARTEVENTS_cleaned)[grepl("n_hour_missing", colnames(CHARTEVENTS_cleaned))] = gsub("n_hour_missing.", "h_m_", colnames(CHARTEVENTS_cleaned)[grepl("n_hour_missing", colnames(CHARTEVENTS_cleaned))])
+
+
+```
+
+## look at the values of vital signs
+```{r  fig.height = 3, fig.width = 5}
+meltData <- melt(CHARTEVENTS_cleaned %>% dplyr::select(which(names(CHARTEVENTS_cleaned) %in% items_vital)) )
+par(mar=c(7,5,1,1))
+# boxplot(data=meltData, value~variable, horizontal=TRUE, las=1, main = "BoxPlot of vital signs", ylab="")
+ggplot(data=meltData, aes(x=value, y=factor(variable))) + 
+  geom_boxplot() + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(title = "BoxPlot of vital signs", x = "", y="")
+
+g <- ggplot(data=meltData, aes(x=value, y=factor(variable))) + 
+  geom_boxplot() + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(title = "BoxPlot of vital signs", x = "", y="")
+
+ggsave(file=here(plotFolder, "box_plot_vitals.png"), g, width = 5, height = 3, dpi = 1200) 
+
+save.image(file=here(rdataFolder, "00_3_loaded_CHARTEVENTS_cleaned.RData"))
+```
+
+
+
+
+# 6. Get Lab tests
+## Select lab tests
+```{r}
+# labs_item_abb <- c( 'ALT', 'ALK', 'AST',  'pH',  'PCO2', 'PO2', 'BE', 'Na', 'K', 'Cl', 'HCO3', 'AG', 'BG', 'BUN',
+#                      'Cr', 'WBCs', 'RBCs', 'HGB', 'HCT', 'MCV',  'MCH', 'MCHC',  'RDW',  'PLT', 'MO',  'EO',
+#                      'BA',   'LY', 'NE', 'Lac', 'Ca', 'Mg', 'Phos', 'PTT', 'PT', 'TBil'
+#                    )  # remove LY
+
+labs_item_abb <- c( 'ALT', 'ALK', 'AST',  'pH',  'PCO2', 'PO2', 'BE', 'Na', 'K', 'Cl', 'HCO3', 'AG', 'BG', 'BUN',
+                     'Cr', 'WBCs', 'RBCs', 'HGB', 'HCT', 'MCV',  'MCH', 'MCHC',  'RDW',  'PLT', 'MO',  'EO',
+                     'BA', 'NE', 'Lac', 'Ca', 'Mg', 'Phos', 'PTT', 'PT', 'TBil'
+                   )
+
+lab_item_ids <- c(50861, # Alanine aminotransferase (ALT)
+                  50863, # Alkaline phosphatase (ALK)
+                  50878, # Aspartate aminotransferase (AST)
+                  50820, # Arterial blood gases: pH
+                  50818, # Arterial blood gases: partial pressure of carbon dioxide (PCO2)
+                  50821, # Arterial blood gases: PO2
+                  50802, # Base excess (BE)
+                  50983, # Basic metabolic panel: sodium (Na)
+                  50971, # Basic metabolic panel: potassium (K)
+                  50902, # Basic metabolic panel: chloride (Cl)
+                  50882, # Basic metabolic panel: bicarbonate (HCO3)
+                  50868, # Basic metabolic panel: anion gap (AG)
+                  50931, # Basic metabolic panel: blood glucose (BG)
+                  51006, # Basic metabolic panel: blood urea nitrogen (BUN)
+                  50912, # Basic metabolic panel: creatinine (Cr)
+                  51301, # Complete blood count: white blood cells (WBCs)
+                  51279, # Complete blood count: red blood cells (RBCs)
+                  51222, # Complete blood count: hemoglobin (HGB)
+                  51221, # Complete blood count: hematocrit (HCT)
+                  51250, # Complete blood count: mean corpuscular volume (MCV)
+                  51248, # Complete blood count: mean corpuscular hemoglobin (MCH),
+                  51249, # Complete blood count: mean corpuscular hemoglobin concentration (MCHC)
+                  51277, # Complete blood count: red cell distribution width (RDW)
+                  51265, # Complete blood count: platelet count (PLT)
+                  51254, # Complete blood count: absolute monocytes (MO)
+                  51200, # Complete blood count: absolute eosinophils (EO)
+                  51146, # Complete blood count: absolute basophils (BA)
+                  # 70052, # Complete blood count: absolute lymphocytes (LY)
+                  51256, # Complete blood count: absolute neutrophils (NE)
+                  50813, # Lactate (Lac)
+                  50893, # Calcium (Ca)
+                  50960, # Magnesium (Mg)
+                  50970, # Phosphate (Phos)
+                  51275, # Partial thromboplastin time (PTT)
+                  51274, # Prothrombin time (PT)
+                  50885# Total bilirubin (TBil)
+)
+
+names(lab_item_ids) <- labs_item_abb
+
+lab_item_labels <- c("Alanine aminotransferase", "Alkaline phosphatase", "Aspartate aminotransferase",
+                     "pH", "partial pressure of carbon dioxide",
+                     "PO2", "Base excess",
+                     "sodium", "potassium", "chloride",
+                     "bicarbonate", "anion gap",
+                     "blood glucose", "blood urea nitrogen",
+                     "creatinine",
+                     "white blood cells", "red blood cells",
+                     "hemoglobin", "hematocrit",
+                     "mean corpuscular volume",
+                     "mean corpuscular hemoglobin",
+                     "mean corpuscular hemoglobin concentration",
+                     "red cell distribution width", "platelet count",
+                     "absolute monocytes", "absolute eosinophils",
+                     "absolute basophils", # "absolute lymphocytes",
+                     "absolute neutrophils", "Lactate", "Calcium", "Magnesium",
+                     "Phosphate", "Partial thromboplastin time", "Prothrombin time", "Total bilirubin"
+)
+
+D_ITEMS_labs_sub <- data.frame('ITEMID' = lab_item_ids, 'LABEL' = lab_item_labels, 'ABBREVIATION' = labs_item_abb )
+print(D_ITEMS_labs_sub)
+
+D_ITEMS_labs_sub$UNITNAME <- NA
+```
+
+```{r}
+D_ITEMS_sub <- rbind(D_ITEMS_vital_sub, D_ITEMS_labs_sub)
+D_ITEMS_sub$var_type <- "VitalSign"
+D_ITEMS_sub$var_type[D_ITEMS_sub$ITEMID %in% lab_item_ids] = "Lab"
+
+items <- sort(unique(D_ITEMS_sub$ABBREVIATION))
+items <- items[!items %in% c("TempF","DBP")]
+items_vital <- items[!items %in% D_ITEMS_sub$ABBREVIATION[D_ITEMS_sub$var_type=="Lab"]]
+items_lab <- items[items %in% D_ITEMS_sub$ABBREVIATION[D_ITEMS_sub$var_type=="Lab"]]
+
+```
+
+
+## Load LABEVENTS (records) of the selected items
+```{r}
+LABEVENTS <- fread(here("data", "raw_data", "mimic-iii-clinical-database-1.4", "LABEVENTS.csv"),
+                     header = T, stringsAsFactors = FALSE)
+```
+
+
+
+## Keep records recorded within the first 5 days of the ICU stay
+Since some records are recorded more than a week later since the ICU intime, so we decided to limit the records within 5 days since the ICU intime.
+```{r, fig.width=10, fig.height=5}
+df_icu_time <- df2[,c("SUBJECT_ID", "HADM_ID", "INTIME","OUTTIME")]
+
+LABEVENTS_cleaned <- LABEVENTS %>%
+  filter(ITEMID %in% D_ITEMS_labs_sub$ITEMID,
+         HADM_ID %in% all_adm_id$id,
+         !is.na(VALUENUM)) %>%
+  select(ROW_ID, SUBJECT_ID, HADM_ID, ITEMID, CHARTTIME, VALUENUM, VALUEUOM, FLAG) %>%
+  mutate(CHARTTIME  = ymd_hms(CHARTTIME))
+
+
+LABEVENTS_cleaned <- LABEVENTS_cleaned %>%
+    merge(df_icu_time, by=c("HADM_ID", "SUBJECT_ID"), all = T, allow.cartesian=TRUE) %>%
+    merge(D_ITEMS_labs_sub[, c('ITEMID', 'LABEL', 'ABBREVIATION')],  by="ITEMID", all = T) %>%
+    filter(!is.na(ITEMID)) %>%
+    unique() %>%
+    mutate(INTIME = ymd_hms(INTIME),
+           OUTTIME = ymd_hms(OUTTIME),
+           CHARTTIME = ymd_hms(CHARTTIME),
+           Chartime_after_ICUin_days = as.numeric(difftime(CHARTTIME, INTIME))/(60*60*24),
+           Chartime_after_ICUin_half_days = as.numeric(difftime(CHARTTIME, INTIME))/(60*60*12),
+           Chartime_before_ICUout_days = as.numeric(difftime(OUTTIME, CHARTTIME))/(60*60*24)) %>%
+    filter(Chartime_after_ICUin_days > 0, Chartime_before_ICUout_days > 0) %>%
+    select(-Chartime_before_ICUout_days)
+
+```
+
+```{r time_after_in_lab, fig.width=10, fig.height=8}
+library(ggplot2)
+library(grid)
+p1 <- ggplot(LABEVENTS_cleaned, aes(x=ABBREVIATION, y=Chartime_after_ICUin_days)) +
+  geom_violin(trim=FALSE) +
+  geom_boxplot(width=0.1, fill = "red", alpha = 0.6) +
+  labs(title = "All inital recordes", x = "", y = "Time in days") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+LABEVENTS_cleaned <- LABEVENTS_cleaned  %>%
+  filter(Chartime_after_ICUin_days >= 0) %>%
+  filter(Chartime_after_ICUin_days < 5)
+
+p2 <- ggplot(LABEVENTS_cleaned, aes(x=ABBREVIATION, y=Chartime_after_ICUin_days)) +
+  geom_violin(trim=FALSE) +
+  geom_boxplot(width=0.1, fill = "red", alpha = 0.6) +
+  labs(title = "After keeping the first 5 days", x = "", y = "Time in days") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+gridExtra::grid.arrange(p1, p2, nrow = 2, 
+                        top = textGrob("Violin plots of time between lab tests recorded time and ICU in-time", gp=gpar(fontsize=15)))
+```
+
+
+
+
+
+
+<!-- ## Define and Impute Outliers -->
+
+<!-- In this study, we define an outlier as an observation that lies at more than 3 standard deviations away from the observation mean. -->
+<!-- Lower Bound: $\hat\mu - 3*\hat{sd}$ -->
+<!-- Upper Bound: $\hat\mu + 3*\hat{sd}$ -->
+
+
+```{r}
+get_mean_lab <- function(abb){
+  records = LABEVENTS_cleaned$VALUENUM[LABEVENTS_cleaned$ABBREVIATION == abb]
+  return(mean(records))
+}
+
+get_sd_lab <- function(abb){
+  records = LABEVENTS_cleaned$VALUENUM[LABEVENTS_cleaned$ABBREVIATION == abb]
+  return(sd(records))
+}
+
+get_median_lab <- function(abb){
+  records = LABEVENTS_cleaned$VALUENUM[LABEVENTS_cleaned$ABBREVIATION == abb]
+  return(median(records))
+}
+
+get_min_lab <- function(abb){
+  records = LABEVENTS_cleaned$VALUENUM[LABEVENTS_cleaned$ABBREVIATION == abb]
+  return(min(records))
+}
+
+get_max_lab <- function(abb){
+  records = LABEVENTS_cleaned$VALUENUM[LABEVENTS_cleaned$ABBREVIATION == abb]
+  return(max(records))
+}
+
+# outlier_range_lab <- data.frame(ABB = labs_item_abb,
+#                                 mean = sapply(labs_item_abb, get_mean_lab),
+#                                 median = sapply(labs_item_abb, get_median_lab),
+#                                 sd = sapply(labs_item_abb, get_sd_lab) )%>%
+#   mutate(min = mean - 3 * sd,
+#          max = mean + 3 * sd) %>%
+#   select(ABB, min, mean, median, sd, max)
+# 
+# is_outlier_vital <- function(val, abb){
+#   is_outlier = (val > outlier_range_lab$max[outlier_range_lab$ABB == abb]) | (val < outlier_range_lab$min[outlier_range_lab$ABB == abb])
+#   return(is_outlier)
+# }
+
+outlier_range_lab <- data.frame(ABB = labs_item_abb,
+                                min = sapply(labs_item_abb, get_min_lab),
+                                max = sapply(labs_item_abb, get_max_lab),
+                                mean = sapply(labs_item_abb, get_mean_lab),
+                                median = sapply(labs_item_abb, get_median_lab),
+                                sd = sapply(labs_item_abb, get_sd_lab) )%>%
+  select(ABB, min, max, mean, median, sd)
+```
+
+```{r}
+LABEVENTS_cleaned <- LABEVENTS_cleaned %>%
+  mutate(day = ceiling(Chartime_after_ICUin_days),
+         half_day = ceiling(Chartime_after_ICUin_half_days))
+         # outlier = mapply(is_outlier_vital, VALUENUM, ABBREVIATION))
+```
+
+<!-- ### Imputing outliers to the closest upper or lower bound values. -->
+<!-- ```{r fig.height = 6, fig.width = 10} -->
+<!-- replace_outliers_lab <- function(val, abb, is_outlier){ -->
+<!--   if(is_outlier){ -->
+<!--     if(val > outlier_range_lab$max[outlier_range_lab$ABB == abb]){ -->
+<!--       val = outlier_range_lab$max[outlier_range_lab$ABB == abb] -->
+<!--     } else { -->
+<!--       val = outlier_range_lab$min[outlier_range_lab$ABB == abb] -->
+<!--     } -->
+<!--   } -->
+<!--   return(val) -->
+<!-- } -->
+
+<!-- LABEVENTS_cleaned <- LABEVENTS_cleaned %>% -->
+<!--   mutate(VALUENUM = mapply(replace_outliers_lab, VALUENUM, ABBREVIATION, outlier)) -->
+<!-- ``` -->
+
+## Get lab tests rates in each 12 hours for each ICU stay
+```{r}
+LABEVENTS_cleaned <- LABEVENTS_cleaned %>%
+    group_by(HADM_ID, SUBJECT_ID, ITEMID, INTIME, OUTTIME, ABBREVIATION, half_day) %>%
+    arrange(CHARTTIME) %>%
+    mutate(n_lab_half_day = row_number(),
+           # n_outlier_half_day = sum(outlier),
+           VALUENUM_mean = mean(VALUENUM)) %>%
+    filter(n_lab_half_day == max(n_lab_half_day),
+           day != 0) %>%
+    ungroup() %>%
+    filter(half_day <= 10)
+
+LABEVENTS_cleaned <- LABEVENTS_cleaned %>%
+  select(HADM_ID, SUBJECT_ID, INTIME, OUTTIME, half_day, ABBREVIATION, n_lab_half_day, VALUENUM_mean) %>%
+  rename(n_lab = n_lab_half_day)
+```
+
+
+
+### Plot number of lab tests each half day
+```{r }
+# LABEVENTS_cleaned_tmp <- LABEVENTS_cleaned %>%
+#   mutate(percent_outlier = 100 * n_outlier/n_lab,
+#          percent_outlier = ifelse(percent_outlier == 0, "0",
+#                                   ifelse(percent_outlier <= 10, "(0, 10]",
+#                                          ifelse(percent_outlier <= 20, "(10, 20]",
+#                                                 ifelse(percent_outlier <= 30, "(20, 30]",
+#                                                        ifelse(percent_outlier <= 40, "(30, 40]",
+#                                                               ifelse(percent_outlier <= 50, "(40, 50]",
+#                                                                      ifelse(percent_outlier <= 60, "(50, 60]",
+#                                                                             ifelse(percent_outlier <= 70, "(60, 70]",
+#                                                                                    ifelse(percent_outlier <= 80, "(70, 80]",
+#                                                                                           ifelse(percent_outlier <= 90, "(80, 90]",
+#                                                                                                  ifelse(percent_outlier < 100, "(90, 100)", "100"))))))))))),
+#          n_lab = ifelse(6 <= n_lab & n_lab <= 10, "6-10",
+#                               ifelse(11 <= n_lab & n_lab <= 15, "11-15",
+#                                      ifelse(16 <= n_lab & n_lab <= 20, "16-20",
+#                                             ifelse(21 <= n_lab & n_lab <= 25, "21-25",
+#                                                    ifelse(26 <= n_lab & n_lab <= 30, "26-30",
+#                                                           ifelse(n_lab > 30, ">30", n_lab)))))),
+#          n_outlier = ifelse(n_outlier < 6, n_outlier,
+#                             ifelse(n_outlier < 11, "6-10", "> 10")))
+
+LABEVENTS_cleaned_tmp <- LABEVENTS_cleaned %>%
+  mutate(n_lab = ifelse(6 <= n_lab & n_lab <= 10, "6-10",
+                              ifelse(11 <= n_lab & n_lab <= 15, "11-15",
+                                     ifelse(16 <= n_lab & n_lab <= 20, "16-20",
+                                            ifelse(21 <= n_lab & n_lab <= 25, "21-25",
+                                                   ifelse(26 <= n_lab & n_lab <= 30, "26-30",
+                                                          ifelse(n_lab > 30, ">30", n_lab)))))))
+
+n_lab_day_col <- c("gray45", rainbow(length(c(as.character(1:5), "6-10", "11-15", "16-20", "21-25", "26-30", ">30"))))
+names(n_lab_day_col) <- c(as.character(0:5), "6-10", "11-15", "16-20", "21-25", "26-30", ">30")
+
+# n_lab_day_col <- n_lab_day_col[1:9]
+
+# 
+# n_outlier_half_day_col <- c(rainbow(length(c(as.character(0:5), "6-10", ">10"))))
+# names(n_outlier_half_day_col) <- c(as.character(0:5), "6-10", ">10")
+# 
+# percent_outlier_half_day_col <- c(rainbow(length(c("0", "(0, 10]", "(10, 20]", "(20, 30]", "(30, 40]", "(40, 50]", "(50, 60]", "(60, 70]", "(70, 80]", "(80, 90]", "(90, 100)", "100"))))
+# names(percent_outlier_half_day_col) <- c("0", "(0, 10]", "(10, 20]", "(20, 30]", "(30, 40]", "(40, 50]", "(50, 60]", "(60, 70]", "(70, 80]", "(80, 90]", "(90, 100)", "100")
+# 
+
+
+# ICU_stays <- data.frame(ICUSTAY_ID=rep(unique(CHARTEVENTS_cleaned0_lab_1$ICUSTAY_ID), each=5),
+#                         day = rep(c(1:5),length(unique(CHARTEVENTS_cleaned0_lab_1$ICUSTAY_ID))))
+tmp_day <- LABEVENTS_cleaned_tmp %>%
+  select(HADM_ID, OUTTIME, half_day) %>%
+  unique()
+
+seq_function <- function(i){
+  return(1:i)
+}
+
+tmp_ICU_stays <- data.frame(HADM_ID=rep(tmp_day$HADM_ID, tmp_day$half_day),
+                            OUTTIME=rep(tmp_day$OUTTIME, tmp_day$half_day),
+                            half_day = unlist(sapply(tmp_day$half_day, seq_function, simplify = T)))
+```
+
+```{r  plot_num_lab_each_12h, fig.width=9, fig.height=20}
+plots_lab <- list()
+leg <- NA
+for (i in 1:length(items_lab)) {
+  r = items_lab[i]
+  tmp0 <- LABEVENTS_cleaned_tmp[LABEVENTS_cleaned_tmp$ABBREVIATION == r, ] %>%
+    select(HADM_ID, OUTTIME, half_day, n_lab)
+  tmp <- merge(tmp_ICU_stays, tmp0, by=c("HADM_ID", "OUTTIME", "half_day"), all.x =T, all.y = F)
+  tmp$n_lab[is.na(tmp$n_lab)] = 0
+  tmp$n_lab = as.character(tmp$n_lab)
+  pi <- ggplot(tmp, aes(x=half_day, fill=n_lab)) +
+    geom_bar() +
+    labs(y="", x="", title=r ) +
+    theme(plot.title = element_text(hjust = 0.5))+
+    scale_fill_manual(values = n_lab_day_col)
+
+  if(i %in% c(0:12 *3+1)) {
+    pi <- pi + labs(y="Number of Patients", x="")
+  }
+  if(i %in% c((length(items_lab)-2):length(items_lab))) {
+    pi <- pi + labs(x="Half Day")
+  }
+
+  leg <- cowplot::get_legend(pi)
+  pi <- pi + theme(legend.position = "none")
+
+
+  plots_lab[[i]] = pi
+}
+
+
+lay_out_matrix_1 <- rbind(c(1,2,3,7),
+                          c(4,5,6,7))
+layout_matrix <- lay_out_matrix_1
+
+for(j in 1:6) {
+  plots_lab <- append(plots_lab, list(leg), j*7-1)
+  if(! j == 1){
+    layout_matrix <- rbind(layout_matrix, lay_out_matrix_1 + (j - 1)*7)
+  }
+}
+
+layout_matrix[12,3] = NA
+layout_matrix[12,4] = layout_matrix[11,4] = 41
+
+
+library(gridExtra)
+
+grid.arrange(grobs = plots_lab, layout_matrix = layout_matrix,
+             top = textGrob(paste("Lab Tests Rates in Each Half Day"), gp=gpar(fontsize=15)))
+
+g <- arrangeGrob(grobs = plots_lab, layout_matrix = layout_matrix,
+             top = textGrob(paste("Lab Tests Rates in Each Half Day"), gp=gpar(fontsize=15)))
+ggsave(file=here(plotFolder,"plot_lab_rates_each_12h.png"), g, width = 9, height = 20, dpi = 1200) #saves g
+
+
+```
+
+
+
+
+<!-- ### Plot number of outliers each half day -->
+<!-- ```{r  plot_num_lab_outlier_each_12h, fig.width=9, fig.height=20} -->
+<!-- plots_lab <- list() -->
+<!-- leg <- NA -->
+<!-- for (i in 1:length(items_lab)) { -->
+<!--   r = items_lab[i] -->
+<!--   tmp0 <- LABEVENTS_cleaned_tmp[LABEVENTS_cleaned_tmp$ABBREVIATION == r, ] %>% -->
+<!--     select(HADM_ID, OUTTIME, half_day, n_outlier) -->
+<!--   tmp <- merge(tmp_ICU_stays, tmp0, by=c("HADM_ID", "OUTTIME", "half_day"), all.x =T, all.y = F) -->
+<!--   tmp$n_outlier[is.na(tmp$n_outlier)] = 0 -->
+<!--   tmp$n_outlier = as.character(tmp$n_outlier) -->
+<!--   pi <- ggplot(tmp, aes(x=half_day, fill=n_outlier)) + -->
+<!--     geom_bar() + -->
+<!--     labs(y="", x="", title=r ) + -->
+<!--     theme(plot.title = element_text(hjust = 0.5))+ -->
+<!--     scale_fill_manual(values = n_outlier_half_day_col) -->
+
+<!--   if(i %in% c(0:12 *3+1)) { -->
+<!--     pi <- pi + labs(y="Number of Patients", x="") -->
+<!--   } -->
+<!--   if(i %in% c((length(items_lab)-2):length(items_lab))) { -->
+<!--     pi <- pi + labs(x="Half Day") -->
+<!--   } -->
+
+<!--   leg <- cowplot::get_legend(pi) -->
+<!--   pi <- pi + theme(legend.position = "none") -->
+
+
+<!--   plots_lab[[i]] = pi -->
+<!-- } -->
+
+
+
+
+<!-- lay_out_matrix_1 <- rbind(c(1,2,3,7), -->
+<!--                           c(4,5,6,7)) -->
+<!-- layout_matrix <- lay_out_matrix_1 -->
+
+<!-- for(j in 1:6) { -->
+<!--   plots_lab <- append(plots_lab, list(leg), j*7-1) -->
+<!--   if(! j == 1){ -->
+<!--     layout_matrix <- rbind(layout_matrix, lay_out_matrix_1 + (j - 1)*7) -->
+<!--   } -->
+<!-- } -->
+
+<!-- layout_matrix[12,3] = NA -->
+<!-- layout_matrix[12,4] = layout_matrix[11,4] = 41 -->
+
+
+<!-- library(gridExtra) -->
+
+<!-- grid.arrange(grobs = plots_lab, layout_matrix = layout_matrix, -->
+<!--              top = textGrob(paste("Number of Outliers in Lab Tests Recorded in Each Half Day"), gp=gpar(fontsize=15))) -->
+
+<!-- ``` -->
+
+
+
+
+
+<!-- ### Plot percent of outliers each half day -->
+<!-- ```{r  plot_percent_lab_outlier_each_12h, fig.width=9, fig.height=20} -->
+<!-- plots_lab <- list() -->
+<!-- leg <- NA -->
+<!-- for (i in 1:length(items_lab)) { -->
+<!--   r = items_lab[i] -->
+<!--   tmp0 <- LABEVENTS_cleaned_tmp[LABEVENTS_cleaned_tmp$ABBREVIATION == r, ] %>% -->
+<!--     select(HADM_ID, OUTTIME, half_day, percent_outlier) -->
+<!--   tmp <- merge(tmp_ICU_stays, tmp0, by=c("HADM_ID", "OUTTIME", "half_day"), all.x =T, all.y = F) -->
+<!--   tmp$percent_outlier[is.na(tmp$percent_outlier)] = 0 -->
+<!--   tmp$percent_outlier = as.character(tmp$percent_outlier) -->
+<!--   pi <- ggplot(tmp, aes(x=half_day, fill=percent_outlier)) + -->
+<!--     geom_bar() + -->
+<!--     labs(y="", x="", title=r ) + -->
+<!--     theme(plot.title = element_text(hjust = 0.5))+ -->
+<!--     scale_fill_manual(values = percent_outlier_half_day_col) -->
+
+<!--   if(i %in% c(0:12 *3+1)) { -->
+<!--     pi <- pi + labs(y="Number of Patients", x="") -->
+<!--   } -->
+<!--   if(i %in% c((length(items_lab)-2):length(items_lab))) { -->
+<!--     pi <- pi + labs(x="Day") -->
+<!--   } -->
+
+<!--   leg <- cowplot::get_legend(pi) -->
+<!--   pi <- pi + theme(legend.position = "none") -->
+
+
+<!--   plots_lab[[i]] = pi -->
+<!-- } -->
+
+
+
+
+<!-- lay_out_matrix_1 <- rbind(c(1,2,3,7), -->
+<!--                           c(4,5,6,7)) -->
+<!-- layout_matrix <- lay_out_matrix_1 -->
+
+<!-- for(j in 1:6) { -->
+<!--   plots_lab <- append(plots_lab, list(leg), j*7-1) -->
+<!--   if(! j == 1){ -->
+<!--     layout_matrix <- rbind(layout_matrix, lay_out_matrix_1 + (j - 1)*7) -->
+<!--   } -->
+<!-- } -->
+
+<!-- layout_matrix[12,3] = NA -->
+<!-- layout_matrix[12,4] = layout_matrix[11,4] = 41 -->
+
+
+<!-- library(gridExtra) -->
+
+<!-- grid.arrange(grobs = plots_lab, layout_matrix = layout_matrix, -->
+<!--              top = textGrob(paste("Percent (%) of Outliers in Lab Tests Recorded in Each Half Day"), gp=gpar(fontsize=15))) -->
+
+<!-- ``` -->
+
+
+
+<!-- ```{r} -->
+<!-- rm(LABEVENTS_cleaned_tmp) -->
+<!-- ``` -->
+
+
+```{r}
+# save.image(file=here(rdataFolder, "before_reshape_LABEVENTS_cleaned.RData"))
+
+library("reshape2")
+#--------------------------------------------------------
+reshape_function <- function(data){
+  print("reshaping lab tests data\n")
+  data <- reshape(as.data.frame(data),
+                               timevar = "ABBREVIATION",
+                               idvar = c("HADM_ID","SUBJECT_ID", "INTIME", "OUTTIME", "half_day"),
+                               v.names=c("n_lab", "VALUENUM_mean"),
+                               direction = "wide")
+  return(data)
+}
+
+LABEVENTS_cleaned_vec <- split(LABEVENTS_cleaned, rep(1:20, each=ceiling(nrow(LABEVENTS_cleaned)/20)))
+# LABEVENTS_cleaned_try <- mclapply(LABEVENTS_cleaned_vec, reshape_function, mc.cores = detectCores())
+LABEVENTS_cleaned_try <- mclapply(LABEVENTS_cleaned_vec, reshape_function, mc.cores = 1)
+LABEVENTS_cleaned <- rbind(LABEVENTS_cleaned_try[[1]], LABEVENTS_cleaned_try[[2]], LABEVENTS_cleaned_try[[3]], LABEVENTS_cleaned_try[[4]],
+                           LABEVENTS_cleaned_try[[5]], LABEVENTS_cleaned_try[[6]], LABEVENTS_cleaned_try[[7]], LABEVENTS_cleaned_try[[8]],
+                           LABEVENTS_cleaned_try[[9]], LABEVENTS_cleaned_try[[10]],LABEVENTS_cleaned_try[[11]],LABEVENTS_cleaned_try[[12]],
+                           LABEVENTS_cleaned_try[[13]],LABEVENTS_cleaned_try[[14]],LABEVENTS_cleaned_try[[15]],LABEVENTS_cleaned_try[[16]],
+                           LABEVENTS_cleaned_try[[17]],LABEVENTS_cleaned_try[[18]],LABEVENTS_cleaned_try[[19]],LABEVENTS_cleaned_try[[20]])
+#--------------------------------------------------------
+# LABEVENTS_cleaned <- reshape(as.data.frame(LABEVENTS_cleaned),
+#                                timevar = "ABBREVIATION",
+#                                idvar = c("HADM_ID","SUBJECT_ID", "INTIME", "OUTTIME", "half_day"),
+#                                v.names=c("n_lab", "VALUENUM_mean"),
+#                                direction = "wide")
+#--------------------------------------------------------
+
+
+
+colnames(LABEVENTS_cleaned) <- gsub("VALUENUM_mean.", "", colnames(LABEVENTS_cleaned))
+colnames(LABEVENTS_cleaned)[grepl("n_lab", colnames(LABEVENTS_cleaned))] = gsub("n_lab.", "n_", colnames(LABEVENTS_cleaned)[grepl("n_lab", colnames(LABEVENTS_cleaned))])
+# colnames(LABEVENTS_cleaned)[grepl("n_outlier", colnames(LABEVENTS_cleaned))] = gsub("n_outlier.", "n_outlier_", colnames(LABEVENTS_cleaned)[grepl("n_outlier", colnames(LABEVENTS_cleaned))])
+
+sum_NA <- function(x) {if (all(is.na(x))) x[NA_integer_] else sum(x, na.rm = TRUE)}
+LABEVENTS_cleaned <- LABEVENTS_cleaned %>%
+  group_by(HADM_ID, SUBJECT_ID, INTIME, OUTTIME, half_day) %>%
+  summarise_if(is.numeric, funs(sum_NA)) %>%
+  ungroup() %>%
+  as.data.frame()
+
+save.image(file=here(rdataFolder, "00_4_after_reshape_LABEVENTS_cleaned.RData"))
+```
+
+
+## look at the values
+```{r  fig.height = 4, fig.width = 22}
+meltData <- melt(LABEVENTS_cleaned %>% dplyr::select(which(names(LABEVENTS_cleaned) %in% items_lab)) )
+# par(mar=c(7,5,1,1))
+
+g <- ggplot(data=meltData, aes(x=factor(variable, levels=items_lab), y=value)) + 
+  geom_boxplot() + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(title = "BoxPlot of lab tests", x = "", y="")
+
+ggsave(file=here(plotFolder, "box_plot_labs.png"), g, width =22, height = 4, dpi = 1200) 
+```
+
+
+# 7. Create dummy vars for unordered categorical vars
+
+
+```{r}
+# df$ETHNICITY[df$ETHNICITY %in% c("AMERICAN INDIAN/ALASKA NATIVE", "AMERICAN INDIAN/ALASKA NATIVE FEDERALLY RECOGNIZED TRIBE", "SOUTH AMERICAN")] = "AMERICAN"
+df_baseline$ETHNICITY[grepl("ASIAN -", df_baseline$ETHNICITY)] = "ASIAN"
+df_baseline$ETHNICITY[grepl("BLACK", df_baseline$ETHNICITY)] = "BLACK"
+df_baseline$ETHNICITY[grepl("WHITE", df_baseline$ETHNICITY)] = "WHITE"
+df_baseline$ETHNICITY[grepl("HISPANIC", df_baseline$ETHNICITY) | grepl("LATINO", df_baseline$ETHNICITY)] = "HISPANIC"
+df_baseline$ETHNICITY[(! df_baseline$ETHNICITY %in% c("ASIAN", "BLACK", "WHITE", "HISPANIC")) & (! is.na(df_baseline$ETHNICITY))] = "Other"
+```
+
+```{r}
+df_baseline$RELIGION[df_baseline$RELIGION %in% c("7TH DAY ADVENTIST", "BAPTIST", "CATHOLIC", "CHRISTIAN SCIENTIST", "GREEK ORTHODOX", "JEHOVAH'S WITNESS", "LUTHERAN", "METHODIST", "PROTESTANT QUAKER", "ROMANIAN EAST. ORTH", "Christian")] = "CHRISTIAN"
+
+df_baseline$RELIGION[df_baseline$RELIGION %in% c("EPISCOPALIAN", "HEBREW", "HINDU", "LUTHERAN", "BUDDHIST", "MUSLIM", "JEWISH", "UNITARIAN-UNIVERSALIST")] <- "OTHER"
+```
+
+```{r}
+df_baseline$INSURANCE[df_baseline$INSURANCE %in% c("Self Pay")] = "not_insuranced"
+df_baseline$INSURANCE[df_baseline$INSURANCE %in% c("Government","Medicaid","Medicare","Private")] = "insuranced"
+```
+
+```{r}
+df_baseline$MARITAL_STATUS[df_baseline$MARITAL_STATUS %in% c("SINGLE", "WIDOWED", "SEPARATED", "DIVORCED")] = "NOT_PARTNERED"
+df_baseline$MARITAL_STATUS[df_baseline$MARITAL_STATUS %in% c("LIFE PARTNER","MARRIED")] = "PARTNERED"
+```
+
+```{r}
+df_baseline$LANGUAGE[df_baseline$LANGUAGE != "ENGL" & (!is.na(df_baseline$LANGUAGE))] = "Other"
+```
+
+
+## Convert unordered categorical variable into dummy variables
+```{r}
+df_baseline$GENDER_F = ifelse(df_baseline$GENDER=="F", 1, 0)
+df_baseline$INSURANCE_Y = ifelse(df_baseline$INSURANCE=="insuranced", 1, 0)
+df_baseline$RELIGION_Chrt = ifelse(df_baseline$RELIGION=="CHRISTIAN", 1, 0)
+df_baseline$LANGUAGE_ENGL = ifelse(df_baseline$LANGUAGE=="ENGL", 1, 0)
+df_baseline$MARITAL_PARTN = ifelse(df_baseline$MARITAL_STATUS=="PARTNERED", 1, 0)
+df_baseline$ETHNICITY_W = ifelse(df_baseline$ETHNICITY=="WHITE", 1, 0)
+df_baseline$ETHNICITY_B = ifelse(df_baseline$ETHNICITY=="BLACK", 1, 0)
+df_baseline$ETHNICITY_A = ifelse(df_baseline$ETHNICITY=="ASIAN", 1, 0)
+df_baseline$ETHNICITY_H = ifelse(df_baseline$ETHNICITY=="HISPANIC", 1, 0)
+df_baseline$ETHNICITY_O = ifelse(df_baseline$ETHNICITY=="Other", 1, 0)
+```
+
+
+
+
+# 8. Merge all data sets
+
+<!-- ## merge df_Y, df_baseline, df_chartevents, df_labevents -->
+## merge df_Y, df_baseline, df_chartevents
+```{r}
+df <- merge(df_Y, df_baseline, by = c("ICUSTAY_ID", "SUBJECT_ID", "HADM_ID"), all.x = T, all.y = F) %>%
+  unique() %>%
+  filter(ICUSTAY_ID %in% df2$ICUSTAY_ID) 
+
+df <- merge(df, CHARTEVENTS_cleaned, by = c("ICUSTAY_ID", "half_day"), all.x = T, all.y = F) %>%
+  unique()
+
+df <- merge(df, LABEVENTS_cleaned, by = c("HADM_ID", "SUBJECT_ID",  "INTIME", "OUTTIME", "half_day"), all.x = T, all.y = F) %>%
+  unique()
+
+# write.csv(df, file="data/data_merged.csv")
+write.csv(df_baseline, file=here(dataFolder,"df_baseline.csv"))
+
+save.image(file=here(rdataFolder, "00_5_after_merge_dfs.RData"))
+```
+
+
+## View covariates in the data
+```{r}
+var_name_list <- list(ID = c("ICUSTAY_ID", "half_day"),
+                      outcome = "Y_t_plus_1",
+                      baselines = c("AGE", "GENDER_F", "INSURANCE_Y", "LANGUAGE_ENGL", "RELIGION_Chrt", "MARITAL_PARTN", "ETHNICITY_W", "ETHNICITY_B", "ETHNICITY_A", "ETHNICITY_H", "ETHNICITY_O"),
+                      num_baselines = c("n_AGE", "n_GENDER",  "n_INSURANCE", "n_LANGUAGE", "n_RELIGION", "n_MARITAL_STATUS", "n_ETHNICITY"),
+                      vitals = items_vital,
+                      hours_missing_vitals = paste0("h_m_", items_vital),
+                      num_vitals = paste0("n_", items_vital),
+                      num_outlier_vitals = paste0("n_o_", items_vital),
+                      labs = labs_item_abb,
+                      num_labs = paste0("n_", labs_item_abb))
+                      #num_outlier_labs = paste0("n_outlier_", labs_item_abb))
+
+var_name_colors <- list(ID = rep("gray", 2),
+                        outcome = "black", 
+                        baselines = rep("tan3", length(var_name_list$baselines)),
+                        num_baselines = rep("tan4", length(var_name_list$num_baselines)),
+                        vitals = rep("darkorchid1", length(var_name_list$vitals)),
+                        hours_missing_vitals = rep("darkorchid4", length(var_name_list$hours_missing_vitals)),
+                        num_vitals = rep("skyblue2", length(var_name_list$num_vitals)),
+                        num_outlier_vitals = rep("steelblue4", length(var_name_list$num_outlier_vitals)),  
+                        labs = rep("palegreen3", length(var_name_list$labs)),
+                        num_labs = rep("palegreen4", length(var_name_list$num_labs)) )
+                        #num_outlier_labs = rep("palegreen4", length(var_name_list$num_outlier_labs)))
+
+vitals_labs_items_election_info <- list(D_ITEMS_vital_df = D_ITEMS_vital_sub, 
+                                        D_ITEMS_labs_df = D_ITEMS_labs_sub)
+
+vitals_labs_summary <- list(vital_summary = outlier_range_vital, 
+                            lab_summary = outlier_range_lab)
+
+cat("Total of", sum(length(unlist(var_name_list))), "variables for each observation: \n")
+print(var_name_list)
+```
+
+```{r}
+# number of baselines, vitals, labs, and outliers
+for(col_i in c(var_name_list$num_baselines, 
+               var_name_list$num_vitals, 
+               var_name_list$num_outlier_vitals,
+               var_name_list$num_labs)
+               #var_name_list$num_outlier_labs)
+    ){
+  if(sum(is.na(df[[col_i]])) > 0) df[[col_i]][is.na(df[[col_i]])] = 0
+}
+
+for(col_i in c(var_name_list$hours_missing_vitals)){
+  if(sum(is.na(df[[col_i]])) > 0) df[[col_i]][is.na(df[[col_i]])] = 12
+}
+```
+
+```{r}
+# make sure that weird ids are removed
+df <- df[! df$ICUSTAY_ID %in% weird_ICU_Stays, ]
+```
+
+## Baseline covariates summary 
+```{r}
+tmp <- df %>% 
+  dplyr::select(SUBJECT_ID, GENDER_F, INSURANCE_Y, RELIGION_Chrt, MARITAL_PARTN, LANGUAGE_ENGL, ETHNICITY_W, ETHNICITY_B, ETHNICITY_A, ETHNICITY_H) %>%
+  unique() 
+tmp %>% 
+  select(-SUBJECT_ID) %>%
+  mutate_if(is.numeric,as.factor) %>% 
+  tbl_summary(statistic=list(all_categorical() ~ "{n} / {N} ({p}%)"),
+              missing_text = "(Missing)")
+
+```
+
+
+
+# 9. Output data
+```{r}
+df <- df %>% 
+  group_by(ICUSTAY_ID, Y_t_plus_1) %>% 
+  mutate(min_hd_incom = min(half_day)) %>%
+  select(ICUSTAY_ID, half_day, Y_t_plus_1, min_hd_incom, everything()) %>%
+  ungroup() %>%
+  filter(!(Y_t_plus_1 == "incomplete" & half_day != min_hd_incom)) %>% 
+  select(-min_hd_incom)
+
+df_id <- df %>% dplyr::select("HADM_ID","SUBJECT_ID", "ICUSTAY_ID", "INTIME", "OUTTIME", "half_day")
+
+df <- df %>% dplyr::select(unname(unlist(var_name_list)))
+```
+
+```{r}
+write.csv(df, file=here(dataFolder,"data_after_processing.csv"))
+write.csv(df_id, file=here(dataFolder,"data_ids.csv"))
+```
+
+
+```{r}
+rm(list= ls()[!(ls() %in% c('df', 'var_name_list', 'var_name_colors', 'vitals_labs_items_election_info', 'vitals_labs_summary'))])
+
+save.image(file=here(rdataFolder, "01_DataPreprocessing.RData"))
+
+
+summary(df)
+# knitr::purl("scripts/scripts_v2/01_DataPreprocessing.Rmd")
+```
+
