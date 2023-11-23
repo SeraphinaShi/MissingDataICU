@@ -230,7 +230,14 @@ run_sl <- function(df_in, rf_only = T, check_VIA = F){
   return(rtns)
 }
 
-
+exp_var_lists <- list(c("W", "VS", "LT"),
+                      c("n_W", "n_VS", "n_LT"),
+                      c("n_W", "h_m_VS", "n_LT"),
+                      c("n_W", "n_VS", "h_m_VS", "n_LT"),
+                      c("W", "VS", "LT", "n_W", "n_VS", "n_LT"),
+                      c("W", "VS", "LT", "n_W", "h_m_VS", "n_LT"),
+                      c("W", "VS", "LT", "n_W", "n_VS", "h_m_VS", "n_LT")
+)
 
 ## -----------------------------------------------------------------------------------------------------------
 df_sl3 <- get_df_sl(sets = exp_var_lists[[1]], prev_block = F)
