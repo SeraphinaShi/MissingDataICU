@@ -1,13 +1,4 @@
----
-title: "VIA"
-author: "Seraphina Shi"
-output:
-  html_document:
-    toc: true
-    toc_float: true
----
-
-```{r load_lib, include = FALSE, warning=FALSE, message=FALSE, echo=FALSE} 
+## ----load_lib, include = FALSE, warning=FALSE, message=FALSE, echo=FALSE-------------------------------------------
 # setwd("/home/seraphinashi/MissingDataInTheICU")
 # install.packages("polspline")
 library(dplyr)
@@ -20,10 +11,9 @@ library(forcats)
 library(here)
 library(future)
 library(ROCR) 
-```
 
 
-```{r setup, include = FALSE}
+## ----setup, include = FALSE----------------------------------------------------------------------------------------
 plotFolder <- here("results","images","05_VIA")
 if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
 
@@ -38,11 +28,9 @@ knitr::opts_chunk$set(
 
 set.seed(123)
 
-```
 
 
-# Get data
-```{r}
+## ------------------------------------------------------------------------------------------------------------------
 load(here(rdataFolder, "02_2_varFusion.RData"))
 
 PreprocessDataFolder <- here("data", "DataPreprocessing")
@@ -50,10 +38,9 @@ PreprocessDataFolder <- here("data", "DataPreprocessing")
 df <- read.csv(here(PreprocessDataFolder,"02_3_data_complt_blocks.csv"), row.names = 1, header = T)  
 df_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_imputed_complt_blocks.csv"), row.names = 1, header = T)
 df_r_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_random_imputed_complt_blocks.csv"), row.names = 1, header = T)
-```
 
 
-```{r}
+## ------------------------------------------------------------------------------------------------------------------
 cat("Missing value percentage for each column in the data: \n")
 cat("  Baselines: \n")
 print(round((colMeans(is.na(df %>% select(all_of(var_name_list$baselines)))))*100,4))
@@ -62,11 +49,9 @@ cat("  Vital signs: \n")
 print(round((colMeans(is.na(df %>% select(var_name_list$vitals))))*100,4))
 cat("  Lab tests: \n")
 print(round((colMeans(is.na(df %>% select(var_name_list$labs))))*100,4))
-```
 
 
-# Train predictive models with current 12 hour time block data
-```{r}
+## ------------------------------------------------------------------------------------------------------------------
 get_df_prev <- function(df){
     df_prev <- df %>% 
       select(c(var_name_list$ID, 
@@ -244,10 +229,9 @@ run_sl <- function(df_in, rf_only = T, check_VIA = F){
                "AUCPR_summary" = cv_risk_table_AUCPR)
   return(rtns)
 }
-```
 
 
-```{r}
+## ------------------------------------------------------------------------------------------------------------------
 exp_var_lists <- list(c("W", "VS", "LT"),
                       c("n_W", "n_VS", "n_LT"),
                       c("n_W", "h_m_VS", "n_LT"),
@@ -256,10 +240,9 @@ exp_var_lists <- list(c("W", "VS", "LT"),
                       c("W", "VS", "LT", "n_W", "h_m_VS", "n_LT"),
                       c("W", "VS", "LT", "n_W", "n_VS", "h_m_VS", "n_LT")
                       )
-```
 
 
-```{r}
+## ------------------------------------------------------------------------------------------------------------------
 # df_sl3 <- get_df_sl(sets = exp_var_lists[[1]], prev_block = F)
 # 
 # # df_sl3 <- df_sl3[unique(c(1:500, which(df_sl3$Y_t_plus_1 == 1))), ]
@@ -269,11 +252,9 @@ exp_var_lists <- list(c("W", "VS", "LT"),
 # save.image(file=here("data", "rdata", "05_VIA_sl3_all.RData"))
 
 # knitr::purl(here("scripts", "05_VIA.Rmd"))
-```
 
 
-## Random (Unifrom) Imputation
-```{r}
+## ------------------------------------------------------------------------------------------------------------------
 predicts <- list()
 var_imp <- list()
 top_picks <- list()
@@ -306,25 +287,11 @@ for(i in 1:length(exp_var_lists)){
 }
 
 save.image(file=here("data", "rdata", "05_VIA_sl3_rf_randomUnifImput.RData"))
-```
-
-### model performances
-```{r}
-load(here("data", "rdata", "05_VIA_sl3_rf_randomUnifImput.RData"))
-
-# cat("All evaluations: ", names(results_df))
-
-print(results_df %>% select(auc, ci_l_auc, ci_u_auc, aucpr, ci_l_aucpr, ci_u_aucpr, NLL, ci_l_nll, ci_u_nll))
-
-write.csv(results_df, file = here("results", "summary_tables", "04_VIA_sl3_rf_randomUnifImpt_moldels_preformances_summary.csv"))
-
-results_df_randomImput <- results_df
-```
 
 
 
-## Impute with mode or median
-```{r}
+
+## ------------------------------------------------------------------------------------------------------------------
 predicts <- list()
 var_imp <- list()
 top_picks <- list()
@@ -356,167 +323,3 @@ for(i in 1:length(exp_var_lists)){
 }
 
 save.image(file=here("data", "rdata", "05_VIA_sl3_rf_medianModeImput.RData"))
-```
-
-### model performances
-```{r}
-load(here("data", "rdata", "05_VIA_sl3_rf_medianModeImput.RData"))
-print(results_df %>% select(auc, ci_l_auc, ci_u_auc, aucpr, ci_l_aucpr, ci_u_aucpr, NLL, ci_l_nll, ci_u_nll))
-
-write.csv(results_df, file = here("results", "summary_tables", "04_VIA_sl3_rf_medianModeImput_moldels_preformances_summary.csv"))
-
-results_df_medianModeImput <- results_df
-```
-
-
-# Train predictive models with current and previsous 12 hour time block data
-Note that when we include the data from previous 12-hour time block in the predictive model, we are excluding the 1st 12-hour time block because it dose not the previsous time block (and we don't want to impute/create the entire 12-hour time block that doesn't exist).
-
-## Random Imputation
-```{r}
-# predicts <- list()
-# var_imp <- list()
-# top_picks <- list()
-# vars <- c()
-# 
-# for(i in 1:length(exp_var_lists)){  
-#   cat("\n", i, ". \nIncluding", exp_var_lists[[i]], "in the predictive model: \n")
-#   df_sl3 <- sub_df(sets = exp_var_lists[[i]],
-#                    prev_block = T, 
-#                    inputation = "random")
-#   cat("     data dim:", dim(df_sl3))
-#   source(here("scripts", "04_VIA_sl3_rf_1_template.R"))
-#   
-#   predicts[[i]] = fit$predict()
-#   var_imp[[i]] = importance_measure
-#   top_picks[[i]] <- importance_measure$covariate[1:10]
-#   var <- paste0(exp_var_lists[[i]], collapse = ", ")
-#   vars <- append(vars, var)
-#   results <- data.frame(var = var) %>%
-#     cbind(cv_risk_table_AUC) %>% 
-#     cbind(cv_risk_table_AUCPR) %>% 
-#     cbind(cv_risk_table_NLL)
-#   if(i==1){
-#     results_df = results
-#   } else{
-#     results_df = rbind(results_df, results)
-#   }
-# }
-# 
-# save.image(file=here("data", "rdata", "04_VIA_sl3_rf_randomImput_w_prevBlock.RData"))
-```
-
-```{r}
-load(here("data", "rdata", "04_VIA_sl3_rf_randomImput_w_prevBlock.RData"))
-print(results_df %>% select(auc, ci_l_auc, ci_u_auc, aucpr, ci_l_aucpr, ci_u_aucpr, NLL, ci_l_nll, ci_u_nll))
-
-write.csv(results_df, file = here("results", "summary_tables", "04_VIA_sl3_rf_randomImpt_w_prevBlock_moldels_preformances_summary.csv"))
-
-results_df_randomImput_wPrevB <- results_df
-```
-
-
-### Impute with mode or median
-```{r}
-# predicts <- list()
-# var_imp <- list()
-# top_picks <- list()
-# vars <- c()
-# 
-# for(i in 1:length(exp_var_lists)){  
-#   cat("\n", i, ". \nIncluding", exp_var_lists[[i]], "in the predictive model: \n")
-#   df_sl3 <- sub_df(sets = exp_var_lists[[i]],
-#                    prev_block = T, 
-#                    inputation = "median_mode")
-#   cat("     data dim:", dim(df_sl3))
-#   source(here("scripts", "04_VIA_sl3_rf_1_template.R"))
-#   
-#   predicts[[i]] = fit$predict()
-#   var_imp[[i]] = importance_measure
-#   top_picks[[i]] <- importance_measure$covariate[1:10]
-#   var <- paste0(exp_var_lists[[i]], collapse = ", ")
-#   vars <- append(vars, var)
-#   results <- data.frame(var = var) %>%
-#     cbind(cv_risk_table_AUC) %>% 
-#     cbind(cv_risk_table_AUCPR) %>% 
-#     cbind(cv_risk_table_NLL)
-#   if(i==1){
-#     results_df = results
-#   } else{
-#     results_df = rbind(results_df, results)
-#   }
-# }
-# 
-# save.image(file=here("data", "rdata", "04_VIA_sl3_rf_medianModeImput_w_prevBlock.RData"))
-```
-
-```{r}
-load(here("data", "rdata", "04_VIA_sl3_rf_medianModeImput_w_prevBlock.RData"))
-print(results_df %>% select(auc, ci_l_auc, ci_u_auc, aucpr, ci_l_aucpr, ci_u_aucpr, NLL, ci_l_nll, ci_u_nll))
-
-write.csv(results_df, file = here("results", "summary_tables", "04_VIA_sl3_rf_medianModeImput_w_prevBlock_moldels_preformances_summary.csv"))
-
-results_df_medianModeImput_wPrevB <- results_df
-```
-
-
-
-
-
-```{r, fig.width=4, fig.height=3}
-# results_df_medianModeImput$imputation_block = "MedianMode, one 12h-window"
-# results_df_medianModeImput_wPrevB$imputation_block = "MedianMode, two 12h-windows"
-# results_df_randomImput$imputation_block = "Random,     one 12h-window"
-# results_df_randomImput_wPrevB$imputation_block = "Random,     two 12h-windows"
-
-# results_df_medianModeImput$blocks = "one 12h-window"
-# results_df_medianModeImput_wPrevB$blocks = "two 12h-windows"
-# results_df_randomImput$blocks = "one 12h-window"
-# results_df_randomImput_wPrevB$blocks = "two 12h-windows"
-
-results_df <- results_df_medianModeImput %>% mutate(imputation_block = "MedianMode, one 12h-window") %>%
-  rbind(results_df_medianModeImput_wPrevB %>% mutate(imputation_block = "MedianMode, two 12h-windows")) %>%
-  rbind(results_df_randomImput %>% mutate(imputation_block = "Random,     one 12h-window")) %>%
-  rbind(results_df_randomImput_wPrevB %>% mutate(imputation_block = "Random,     two 12h-windows"))
-
-results_df$var <- factor(results_df$var, levels = rev(results_df_medianModeImput$var))
-
-imputation_block_color <- c("MedianMode, one 12h-window" = "#EEB422", 
-                            "MedianMode, two 12h-windows" = "#EE7600", 
-                            "Random,     one 12h-window" = "#BCEE68", 
-                            "Random,     two 12h-windows" = "#1874CD")
-
-p <- ggplot(data=results_df, aes(x=var, y=auc, ymin=ci_l_auc, ymax=ci_u_auc)) +
-    geom_point(shape=24, size=2, aes(col = imputation_block, fill = imputation_block)) +
-    geom_errorbar(shape=24, width=0.3, aes(col = imputation_block)) +
-    # ylim(c(-2,2)) +  # not working
-    coord_flip() +  # flip coordinates (puts labels on y axis)
-    labs(x="Sets of variables")+
-    labs(y="AUC") +
-    ggtitle(" ")+
-    theme(plot.title = element_text(size=8.6, hjust = 0.5),
-          axis.title.y = element_blank(),
-          panel.grid.major.x = element_blank(),
-          axis.text.y = element_text(size=8),
-          axis.title.x = element_text(size=8),
-          axis.text = element_text(size=7),
-          legend.position="bottom") +
-    scale_color_manual(values = imputation_block_color) +
-    scale_fill_manual(values = imputation_block_color) + 
-    guides(fill=guide_legend(title="Imputation method, # windows", nrow = 2),
-           col=guide_legend(title="Imputation method, # windows", nrow = 2)) 
-
-p
-
-ggsave("VIA_rf_performances.png", p, width = 9, height = 6, dpi = 1200)
-```
-
-
-
-
-
-
-
-
-
-
