@@ -18,13 +18,13 @@ library(here)
 
 
 ## ----setup, include = FALSE------------------------------------------------------------------------------------------------------------------------------------------------
-plotFolder <- here("results","images", "v2", "DataPreprocessing")
+plotFolder <- here("results","images", "DataPreprocessing")
 if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
 
-dataFolder <- here("data", "data_v2", "DataPreprocessing")
+dataFolder <- here("data", "DataPreprocessing")
 if(!file.exists(dataFolder)) dir.create(dataFolder,recursive=TRUE)
 
-rdataFolder <- here("data", "data_v2", "rdata")
+rdataFolder <- here("data", "rdata")
 if(!file.exists(rdataFolder)) dir.create(dataFolder,recursive=TRUE)
 
 knitr::opts_chunk$set(
@@ -40,8 +40,9 @@ set.seed(123)
 ## --------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 load(here(rdataFolder, "01_DataPreprocessing.RData"))
 
-df <- read.csv(file=here("data", "data_v2", "DataPreprocessing","01_data_after_processing.csv"), row.names = 1, header= TRUE)
-df_imp <- read.csv(here("data", "data_v2", "DataPreprocessing", "02_1_data_after_imputation.csv"), row.names = 1, header= TRUE)  
+df <- read.csv(file=here("data","DataPreprocessing","01_data_after_processing.csv"), row.names = 1, header= TRUE)
+df_imp <- read.csv(here("data", "DataPreprocessing", "02_1_data_after_imputation.csv"), row.names = 1, header= TRUE)  
+df_r_imp <- read.csv(here("data", "DataPreprocessing", "02_1_data_after_random_imputation.csv"), row.names = 1, header= TRUE)  
 
 
 ## ----correlation_matrix, fig.height = 20, fig.width = 20-------------------------------------------------------------------------------------------------------------------
@@ -155,7 +156,7 @@ var_fusion <- function(dat){
 ## --------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 df <- var_fusion(df)
 df_imp <- var_fusion(df_imp)
-
+df_r_imp <- var_fusion(df_r_imp)
 
 ## ----correlation_matrix_fusion, fig.height = 20, fig.width = 20------------------------------------------------------------------------------------------------------------
 corrplot(cor(df_imp %>% mutate(Y_t_plus_1 = as.numeric(Y_t_plus_1))), 
@@ -170,6 +171,7 @@ dev.off()
 ## --------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 write.csv(df, file=here(dataFolder,"02_2_data.csv"))
 write.csv(df_imp, file=here(dataFolder,"02_2_data_imputed.csv"))
+write.csv(df_r_imp, file=here(dataFolder,"02_2_data_random_imputed.csv"))
 
 
 ## ----blocks_outcome--------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -181,8 +183,7 @@ ggplot(data = df) +
 
 ## --------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 rm(list= ls()[!(ls() %in% c('var_name_list', 'var_name_colors', 'vitals_labs_items_election_info', 'vitals_labs_summary'))])
-rdataFolder <- here("data", "data_v2", "rdata")
+rdataFolder <- here("data", "rdata")
 
 save.image(file=here(rdataFolder, "02_2_varFusion.RData"))
-# knitr::purl("scripts/02_2_varFusion.Rmd")
 

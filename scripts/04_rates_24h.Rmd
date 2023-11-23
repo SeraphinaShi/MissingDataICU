@@ -9,8 +9,8 @@ output:
 
 
 ```{r load_lib, include = FALSE, warning=FALSE, message=FALSE, echo=FALSE} 
-remotes::install_github("tlverse/sl3@devel")
-remotes::install_github("tlverse/tmle3")
+# remotes::install_github("tlverse/sl3@devel")
+# remotes::install_github("tlverse/tmle3")
 
 library(dplyr)
 library(tidyr)
@@ -32,7 +32,7 @@ library(knitr)
 plotFolder <- here("results","images", "04_24h")
 if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
 
-rdataFolder <- here("data", "data_v2", "rdata")
+rdataFolder <- here("data", "rdata")
 
 knitr::opts_chunk$set(
   cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=FALSE,
@@ -49,7 +49,7 @@ set.seed(123)
 ```{r}
 load(here(rdataFolder, "02_2_varFusion.RData"))
 
-PreprocessDataFolder <- here("data", "data_v2", "DataPreprocessing")
+PreprocessDataFolder <- here("data", "DataPreprocessing")
 
 df <- read.csv(here(PreprocessDataFolder,"02_3_data_all_blocks.csv"), row.names = 1, header = T)  
 df_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_imputed_all_blocks.csv"), row.names = 1, header = T)
