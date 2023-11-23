@@ -158,7 +158,7 @@ run_sl <- function(df_in, rf_only = T, check_VIA = F){
     Lrn_lightgbm <- Lrnr_lightgbm$new() # Gradient Boosting Machine
     Lrn_dbarts <- Lrnr_dbarts$new() # Bayesian Additive Regression Trees
     
-    base_lrnrs <- c(lrn_glm, lrnr_earth, lrn_ranger, lrn_bayesglm, lrn_lasso, lrn_ridge, lrn_enet.5, lrn_polspline, lrn_polspline, Lrn_lightgbm, Lrn_dbarts)
+    base_lrnrs <- c(lrn_glm, lrn_earth, lrn_ranger, lrn_bayesglm, lrn_lasso, lrn_ridge, lrn_enet.5, lrn_polspline, lrn_polspline, Lrn_lightgbm, Lrn_dbarts)
     names(base_lrnrs) <- c("GLM", "Gam", "RD", "BayesianGLM", "Lassso", "Ridge", "ElasticNet", "Splines", "XGBoost", "BayesianTrees")
     base_lrnrs_stack <- Stack$new(base_lrnrs) 
     
@@ -230,16 +230,6 @@ run_sl <- function(df_in, rf_only = T, check_VIA = F){
   return(rtns)
 }
 
-
-## -----------------------------------------------------------------------------------------------------------
-exp_var_lists <- list(c("W", "VS", "LT"),
-                      c("n_W", "n_VS", "n_LT"),
-                      c("n_W", "h_m_VS", "n_LT"),
-                      c("n_W", "n_VS", "h_m_VS", "n_LT"),
-                      c("W", "VS", "LT", "n_W", "n_VS", "n_LT"),
-                      c("W", "VS", "LT", "n_W", "h_m_VS", "n_LT"),
-                      c("W", "VS", "LT", "n_W", "n_VS", "h_m_VS", "n_LT")
-                      )
 
 
 ## -----------------------------------------------------------------------------------------------------------
