@@ -283,8 +283,6 @@ for(i in 1:length(exp_var_lists)){
                    inputation = "random_unif")
   cat("     data dim:", dim(df_sl3))
   
-  df_sl3 <- df_sl3[smaller_index, ]
-  
   if(i %in% c(5,6,7)){
     check_VIA_i = T
   } else {
@@ -325,8 +323,6 @@ for(i in 1:length(exp_var_lists)){
                    prev_block = F,
                    inputation = "median_mode")
   cat("     data dim:", dim(df_sl3))
-  
-  df_sl3 <- df_sl3[smaller_index, ]
 
   if(i %in% c(5,6,7)){
     check_VIA_i = T
