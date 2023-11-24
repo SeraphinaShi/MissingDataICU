@@ -68,10 +68,22 @@ get_df_prev <- function(df){
     return(df)
 }
 
-get_df_sl <- function(sets, prev_block = F, inputation = "median"){
-  dat <- df
-  dat_imp <- df_imp
-  dat_r_imp <- df_r_imp
+
+set.seed(123)
+smaller_id_set <- c(sample(unique(df$ICUSTAY_ID[df$Y_t_plus_1 == 0]), 3000), df$ICUSTAY_ID[df$Y_t_plus_1 == 1])
+smaller_df_idx <- which(df$ICUSTAY_ID %in% smaller_id_set)
+
+get_df_sl <- function(sets, smaller_df = T, prev_block = F, inputation = "median"){
+  if(smaller_df){
+    dat <- df[smaller_df_idx, ]
+    dat_imp <- df_imp[smaller_df_idx,]
+    dat_r_imp <- df_r_imp[smaller_df_idx, ]
+  } else {
+    dat <- df
+    dat_imp <- df_imp
+    dat_r_imp <- df_r_imp
+  }
+  
   
   if(prev_block){
     df_prev <- get_df_prev(dat)
