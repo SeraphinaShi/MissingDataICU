@@ -241,6 +241,8 @@ exp_var_lists <- list(c("W", "VS", "LT"),
                       c("W", "VS", "LT", "n_W", "n_VS", "h_m_VS", "n_LT")
                       )
 
+set.seed(123)
+smaller_index <- unique(c(sample(nrow(df), size = nrow(df)*0.2, ), which(df$Y_t_plus_1 == 1)))
 
 ## ------------------------------------------------------------------------------------------------------------------
 # df_sl3 <- get_df_sl(sets = exp_var_lists[[1]], prev_block = F)
@@ -257,8 +259,10 @@ exp_var_lists <- list(c("W", "VS", "LT"),
 ## ------------------------------------------------------------------------------------------------------------------
 predicts <- list()
 var_imp <- list()
-top_picks <- list()
+# top_picks <- list()
 vars <- c()
+
+
 
 for(i in 1:length(exp_var_lists)){
   cat("\n", i, ". \nIncluding", exp_var_lists[[i]], "in the predictive model: \n")
@@ -267,12 +271,18 @@ for(i in 1:length(exp_var_lists)){
                    inputation = "random_unif")
   cat("     data dim:", dim(df_sl3))
   
-  # df_sl3 <- df_sl3[unique(c(1:500, which(df_sl3$Y_t_plus_1 == 1))), ]
-  rslts_i <- run_sl(df_sl3, rf_only = T, check_VIA = T)
+  df_sl3 <- df_sl3[smaller_index, ]
+  
+  if(i %in% c(5,6,7)){
+    check_VIA_i = T
+  } else {
+    check_VIA_i = F
+  }
+  rslts_i <- run_sl(df_sl3, rf_only = T, check_VIA = check_VIA_i)
 
   predicts[[i]] = rslts_i$sl_fit$predict()
   var_imp[[i]] = rslts_i$importance_measure
-  top_picks[[i]] <- rslts_i$importance_measure$covariate[1:10]
+  # top_picks[[i]] <- rslts_i$importance_measure$covariate[1:10]
   var <- paste0(exp_var_lists[[i]], collapse = ", ")
   vars <- append(vars, var)
   results <- data.frame(var = var) %>%
@@ -303,12 +313,19 @@ for(i in 1:length(exp_var_lists)){
                    prev_block = F,
                    inputation = "median_mode")
   cat("     data dim:", dim(df_sl3))
+  
+  df_sl3 <- df_sl3[smaller_index, ]
 
-  rslts_i <- run_sl(df_sl3, rf_only = T, check_VIA = T)
+  if(i %in% c(5,6,7)){
+    check_VIA_i = T
+  } else {
+    check_VIA_i = F
+  }
+  rslts_i <- run_sl(df_sl3, rf_only = T, check_VIA = check_VIA_i)
 
   predicts[[i]] = rslts_i$sl_fit$predict()
   var_imp[[i]] = rslts_i$importance_measure
-  top_picks[[i]] <- rslts_i$importance_measure$covariate[1:10]
+  # top_picks[[i]] <- rslts_i$importance_measure$covariate[1:10]
   var <- paste0(exp_var_lists[[i]], collapse = ", ")
   vars <- append(vars, var)
   results <- data.frame(var = var) %>%

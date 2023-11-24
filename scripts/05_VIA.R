@@ -239,10 +239,15 @@ exp_var_lists <- list(c("W", "VS", "LT"),
                       c("W", "VS", "LT", "n_W", "n_VS", "h_m_VS", "n_LT")
 )
 
-## -----------------------------------------------------------------------------------------------------------
-df_sl3 <- get_df_sl(sets = exp_var_lists[[1]], prev_block = F)
 
-# df_sl3 <- df_sl3[unique(c(1:500, which(df_sl3$Y_t_plus_1 == 1))), ]
+set.seed(123)
+smaller_index <- unique(c(sample(nrow(df), size = nrow(df)*0.2, ), which(df$Y_t_plus_1 == 1)))
+
+
+## -----------------------------------------------------------------------------------------------------------
+df_sl3 <- get_df_sl(sets = c("W", "VS", "LT", "n_W", "n_VS", "h_m_VS", "n_LT"), prev_block = F)
+
+df_sl3 <- df_sl3[smaller_index, ]
 
 rslts <- run_sl(df_sl3, rf_only = F)
 
