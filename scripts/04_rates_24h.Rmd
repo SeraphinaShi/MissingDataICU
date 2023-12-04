@@ -179,7 +179,10 @@ df_24h <- df_24h %>%
 ```
 
 
-
+```{r}
+dim(df_24h)
+length(unique(df_24h$ICUSTAY_ID))
+```
 
 ```{r prepare_function}
 run_tmle3_outcome_rates <- function(Y, A, confounders){
@@ -341,7 +344,7 @@ length(unique(df_24h$ICUSTAY_ID))
 tmp1 <- df_24h %>% 
   dplyr::select(ICUSTAY_ID, AGE, GENDER_F, INSURANCE_Y, RELIGION_Chrt, 
                 MARITAL_PARTN, LANGUAGE_ENGL, ETHNICITY_W, 
-                ETHNICITY_B, ETHNICITY_A, ETHNICITY_H) %>%
+                ETHNICITY_B, ETHNICITY_A, ETHNICITY_H, Y_t_plus_1) %>%
   unique() 
 
 tmp1$Gender = ifelse(tmp1$GENDER_F == 1, "Female", "Male")
@@ -358,11 +361,19 @@ tmp1$Insurance = ifelse(tmp1$INSURANCE_Y == 1, "Yes", "No")
 
 summary(tmp1$AGE)
 
+tmp1$Y_t_plus_1[tmp1$Y_t_plus_1 == 0] = "Survived"
+tmp1$Y_t_plus_1[tmp1$Y_t_plus_1 == 1] = "ICU Mortality"
 
-tmp1 %>% select(Age, Gender, Ethnicity, Marital, Language, Religion, Insurance) %>%
-  tbl_summary(statistic=list(all_categorical() ~ "{n} ({p}%)"),
-              digits = list(  ~ c(0, 1, 1)),
-              missing_text = "(Missing)") 
+table <- tmp1 %>%
+  select(Age, Gender, Ethnicity, Marital, Language, Religion, Insurance, Y_t_plus_1) %>%
+  tbl_summary(
+    by = Y_t_plus_1,  # Add this line to stratify by 'outcome'
+    statistic = list(all_categorical() ~ "{n} ({p}%)"),
+    digits = list(~ c(0, 1, 1)),
+    missing_text = "(Missing)"
+  ) %>%
+  add_overall()
+
 ```
 
 
@@ -482,7 +493,9 @@ ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 15, h
 ## 0. TMLE estimations plots 
 
 ```{r}
-load(here('04_24h_age.RData'))
+load(here('data', 'rdata', '07_24h_age.RData'))
+
+plotFolder <- here("results","images", "04_24h")
 ```
 
 ```{r}
@@ -534,6 +547,8 @@ make_box_plots_tmle_rlts <- function(df_box, y_type){
 
 
 ```{r fig.width=16, fig.height=3}
+
+
 tmle_fit_base_sofa_rlt_age_all <- do.call("rbind", tmle_fit_base_sofa_rlt_list) %>% as.data.frame()
 
 tmle_fit_base_sofa_rlt_age_all_tsm <- tmle_fit_base_sofa_rlt_age_all %>%
@@ -562,6 +577,27 @@ g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_age_all_tsm, 'n_lab') +
   labs(title = "Laboratory Testing Frequencies in the first 24 hours") 
 g
 ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+
+```
+
+```{r fig.width=7, fig.height=2.3}
+plotFolder <- here("results","images", "04_24h")
+
+rlts_s <- tmle_fit_base_sofa_rlt_age_all_tsm[tmle_fit_base_sofa_rlt_age_all_tsm$Y_name %in% c("BP", "HR", "TempC"), ]
+g <- make_box_plots_tmle_rlts(rlts_s, 'n_vital') + labs(title = "Vital Sign Measurement Frequencies") + theme(axis.text.x = element_text(angle = 0, vjust = 0, hjust=0.5)) 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n_small.png")), g, width = 7.5, height = 2.3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(rlts_s, 'h_m_vital') + labs(title = "Vital Sign Missing Hours") + theme(axis.text.x = element_text(angle = 0, vjust = 0, hjust=0.5)) 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m_small.png")), g, width = 7.5, height = 2.3, dpi = 1200)
+
+rlts_s <- tmle_fit_base_sofa_rlt_age_all_tsm[tmle_fit_base_sofa_rlt_age_all_tsm$Y_name %in% c("Lac", "lab_grp1", "lab_grp6"), ]
+g <- make_box_plots_tmle_rlts(rlts_s, 'n_lab') + labs(title = "Laboratory Testing Frequencies")   + theme(axis.text.x = element_text(angle = 0, vjust = 0, hjust=0.5)) 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n_small.png")), g, width = 7.5, height = 2.3, dpi = 1200)
 ```
 
 ```{r, fig.width=6, fig.height=3, results='asis'}
@@ -673,35 +709,35 @@ ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 11, h
 
 
 ```{r}
-x = "ethnicity"
-baselines = var_name_list$baselines[! var_name_list$baselines %in% c("ETHNICITY_W", "ETHNICITY_B", "ETHNICITY_A", "ETHNICITY_H", "ETHNICITY_O")]
-y_vars <- c(var_name_list$num_vitals, var_name_list$hours_missing_vitals, var_name_list$num_labs)
-idx <- 1:length(y_vars)
-
-glmfit_0_rlt_list_eth <- list()
-glmfit_sofa_rlt_list_eth  <- list()
-glmfit_saps_rlt_list_eth  <- list()
-tmle_fit_base_rlt_list_eth  <- list()
-tmle_fit_base_sofa_rlt_list_eth  <- list()
-tmle_fit_base_saps_rlt_list_eth  <- list()
-
-for (i in 1:length(y_vars)) {
-# for (i in 16:18) {
-  y = y_vars[i]
-  cat(paste0("\n## ", i, ". ", y, "\n\n"))
-
-  source('07_rates_24h_template.R')
-
-  glmfit_0_rlt_list_eth[[i]] <- glmfit_0_rlt
-  glmfit_sofa_rlt_list_eth[[i]] <- glmfit_sofa_rlt
-  glmfit_saps_rlt_list_eth[[i]] <- glmfit_saps_rlt
-  tmle_fit_base_rlt_list_eth[[i]] <- tmle_fit_base_rlt
-  tmle_fit_base_sofa_rlt_list_eth[[i]] <- tmle_fit_base_sofa_rlt
-  tmle_fit_base_saps_rlt_list_eth[[i]] <- tmle_fit_base_saps_rlt
-
-  print("haha\n\n")
-}
-save.image(here('04_24h_eth.RData'))
+# x = "ethnicity"
+# baselines = var_name_list$baselines[! var_name_list$baselines %in% c("ETHNICITY_W", "ETHNICITY_B", "ETHNICITY_A", "ETHNICITY_H", "ETHNICITY_O")]
+# y_vars <- c(var_name_list$num_vitals, var_name_list$hours_missing_vitals, var_name_list$num_labs)
+# idx <- 1:length(y_vars)
+# 
+# glmfit_0_rlt_list_eth <- list()
+# glmfit_sofa_rlt_list_eth  <- list()
+# glmfit_saps_rlt_list_eth  <- list()
+# tmle_fit_base_rlt_list_eth  <- list()
+# tmle_fit_base_sofa_rlt_list_eth  <- list()
+# tmle_fit_base_saps_rlt_list_eth  <- list()
+# 
+# for (i in 1:length(y_vars)) {
+# # for (i in 16:18) {
+#   y = y_vars[i]
+#   cat(paste0("\n## ", i, ". ", y, "\n\n"))
+# 
+#   source('07_rates_24h_template.R')
+# 
+#   glmfit_0_rlt_list_eth[[i]] <- glmfit_0_rlt
+#   glmfit_sofa_rlt_list_eth[[i]] <- glmfit_sofa_rlt
+#   glmfit_saps_rlt_list_eth[[i]] <- glmfit_saps_rlt
+#   tmle_fit_base_rlt_list_eth[[i]] <- tmle_fit_base_rlt
+#   tmle_fit_base_sofa_rlt_list_eth[[i]] <- tmle_fit_base_sofa_rlt
+#   tmle_fit_base_saps_rlt_list_eth[[i]] <- tmle_fit_base_saps_rlt
+# 
+#   print("haha\n\n")
+# }
+# save.image(here('04_24h_eth.RData'))
 
 ```
 
@@ -709,7 +745,8 @@ save.image(here('04_24h_eth.RData'))
 ## 0. TMLE estimations plots 
 
 ```{r}
-load(here('04_24h_eth.RData'))
+load('data', 'rdata', here('07_24h_eth.RData'))
+plotFolder <- here("results","images", "04_24h")
 ```
 
 ```{r}
@@ -788,6 +825,22 @@ g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_eth_all_tsm, 'n_lab') +
 g
 ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
 ```
+
+
+```{r fig.width=10, fig.height=2.5}
+plotFolder <- here("results","images", "04_24h")
+
+rlts_s <- tmle_fit_base_sofa_rlt_eth_all_tsm[tmle_fit_base_sofa_rlt_eth_all_tsm$Y_name %in% c("BP", "HR", "RR", "SpO2", "TempC"), ]
+g <- make_box_plots_tmle_rlts(rlts_s, 'n_vital') + labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n_small.png")), g, width = 10.5, height = 2.5, dpi = 1200)
+
+rlts_s <- tmle_fit_base_sofa_rlt_eth_all_tsm[tmle_fit_base_sofa_rlt_eth_all_tsm$Y_name %in% c("HCT", "lab_grp2", "lab_grp4"), ]
+g <- make_box_plots_tmle_rlts(rlts_s, 'n_lab') + labs(title = "Laboratory Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n_small.png")), g, width = 7, height = 2.5, dpi = 1200)
+```
+
 
 ```{r, fig.width=6, fig.height=3, results='asis'}
 for (i in 1:length(y_vars)) {
@@ -927,8 +980,11 @@ ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 11, h
 
 ## 0. TMLE estimations plots
 ```{r}
-load(here('04_24h_gender.RData'))
+load(here('data', 'rdata', '07_24h_gender.RData'))
+
+plotFolder <- here("results","images", "04_24h")
 ```
+
 
 
 ```{r fig.width=16, fig.height=3}
@@ -963,6 +1019,22 @@ g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_gender_all_tsm, 'n_lab') +
 g
 ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
 ```
+
+
+```{r fig.width=7, fig.height=2.5}
+plotFolder <- here("results","images", "04_24h")
+
+rlts_s <- tmle_fit_base_sofa_rlt_gender_all_tsm[tmle_fit_base_sofa_rlt_gender_all_tsm$Y_name %in% c("BP", "HR", "TempC"), ]
+g <- make_box_plots_tmle_rlts(rlts_s, 'n_vital') + labs(title = "Vital Sign Measurement Frequencies") + theme(axis.text.x = element_text(angle = 0, vjust = 0, hjust=0.5)) 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n_small.png")), g, width = 7.5, height = 2.3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(rlts_s, 'h_m_vital') + labs(title = "Vital Sign Missing Hours") + theme(axis.text.x = element_text(angle = 0, vjust = 0, hjust=0.5)) 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m_small.png")), g, width = 7.5, height = 2.3, dpi = 1200)
+
+```
+
 
 ```{r, fig.width=6, fig.height=3, results='asis'}
 for (i in 1:length(y_vars)) {

@@ -52,6 +52,24 @@ df_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_imputed_complt_blocks.cs
 df_r_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_random_imputed_complt_blocks.csv"), row.names = 1, header = T)
 ```
 
+```{r}
+ICUSTAYS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "ICUSTAYS.csv")) %>% 
+  select(SUBJECT_ID, HADM_ID, ICUSTAY_ID)
+
+table <- df %>%
+  select(ICUSTAY_ID, AGE, GENDER_F, MARITAL_PARTN, LANGUAGE_ENGL, RELIGION_Chrt, ETHNICITY_W, ETHNICITY_B, ETHNICITY_A, ETHNICITY_H, ETHNICITY_O, INSURANCE_Y, Y_t_plus_1) %>%
+  unique() %>% 
+  merge(ICUSTAYS, by = "ICUSTAY_ID") %>%
+  select(SUBJECT_ID, AGE, GENDER_F, MARITAL_PARTN, LANGUAGE_ENGL, RELIGION_Chrt, ETHNICITY_W, ETHNICITY_B, ETHNICITY_A, ETHNICITY_H, ETHNICITY_O, INSURANCE_Y, Y_t_plus_1) %>%
+  unique() %>%
+  tbl_summary(
+    by = Y_t_plus_1,  # Add this line to stratify by 'outcome'
+    statistic = list(all_categorical() ~ "{n} ({p}%)"),
+    digits = list(~ c(0, 1, 1)),
+    missing_text = "(Missing)"
+  ) %>%
+  add_overall()
+```
 
 ```{r}
 cat("Missing value percentage for each column in the data: \n")
@@ -286,38 +304,38 @@ exp_var_lists <- list(c("W", "VS", "LT"),
 
 ## Random (Unifrom) Imputation
 ```{r}
-predicts <- list()
-var_imp <- list()
-top_picks <- list()
-vars <- c()
-
-for(i in 1:length(exp_var_lists)){
-  cat("\n", i, ". \nIncluding", exp_var_lists[[i]], "in the predictive model: \n")
-  df_sl3 <- get_df_sl(sets = exp_var_lists[[i]],
-                   prev_block = F,
-                   inputation = "random_unif")
-  cat("     data dim:", dim(df_sl3))
-  
-  # df_sl3 <- df_sl3[unique(c(1:500, which(df_sl3$Y_t_plus_1 == 1))), ]
-  rslts_i <- run_sl(df_sl3, rf_only = T, check_VIA = T)
-
-  predicts[[i]] = rslts_i$sl_fit$predict()
-  var_imp[[i]] = rslts_i$importance_measure
-  top_picks[[i]] <- rslts_i$importance_measure$covariate[1:10]
-  var <- paste0(exp_var_lists[[i]], collapse = ", ")
-  vars <- append(vars, var)
-  results <- data.frame(var = var) %>%
-    cbind(rslts_i$AUC_summary) %>%
-    cbind(rslts_i$AUCPR_summary) %>%
-    cbind(rslts_i$NLL_summary)
-  if(i==1){
-    results_df = results
-  } else{
-    results_df = rbind(results_df, results)
-  }
-}
-
-save.image(file=here("data", "rdata", "05_VIA_sl3_rf_randomUnifImput.RData"))
+# predicts <- list()
+# var_imp <- list()
+# top_picks <- list()
+# vars <- c()
+# 
+# for(i in 1:length(exp_var_lists)){
+#   cat("\n", i, ". \nIncluding", exp_var_lists[[i]], "in the predictive model: \n")
+#   df_sl3 <- get_df_sl(sets = exp_var_lists[[i]],
+#                    prev_block = F,
+#                    inputation = "random_unif")
+#   cat("     data dim:", dim(df_sl3))
+#   
+#   # df_sl3 <- df_sl3[unique(c(1:500, which(df_sl3$Y_t_plus_1 == 1))), ]
+#   rslts_i <- run_sl(df_sl3, rf_only = T, check_VIA = T)
+# 
+#   predicts[[i]] = rslts_i$sl_fit$predict()
+#   var_imp[[i]] = rslts_i$importance_measure
+#   top_picks[[i]] <- rslts_i$importance_measure$covariate[1:10]
+#   var <- paste0(exp_var_lists[[i]], collapse = ", ")
+#   vars <- append(vars, var)
+#   results <- data.frame(var = var) %>%
+#     cbind(rslts_i$AUC_summary) %>%
+#     cbind(rslts_i$AUCPR_summary) %>%
+#     cbind(rslts_i$NLL_summary)
+#   if(i==1){
+#     results_df = results
+#   } else{
+#     results_df = rbind(results_df, results)
+#   }
+# }
+# 
+# save.image(file=here("data", "rdata", "05_VIA_sl3_rf_randomUnifImput.RData"))
 ```
 
 ### model performances
@@ -337,37 +355,37 @@ results_df_randomImput <- results_df
 
 ## Impute with mode or median
 ```{r}
-predicts <- list()
-var_imp <- list()
-top_picks <- list()
-vars <- c()
-
-for(i in 1:length(exp_var_lists)){
-  cat("\n", i, ". \nIncluding", exp_var_lists[[i]], "in the predictive model: \n")
-  df_sl3 <- get_df_sl(sets = exp_var_lists[[i]],
-                   prev_block = F,
-                   inputation = "median_mode")
-  cat("     data dim:", dim(df_sl3))
-
-  rslts_i <- run_sl(df_sl3, rf_only = T, check_VIA = T)
-
-  predicts[[i]] = rslts_i$sl_fit$predict()
-  var_imp[[i]] = rslts_i$importance_measure
-  top_picks[[i]] <- rslts_i$importance_measure$covariate[1:10]
-  var <- paste0(exp_var_lists[[i]], collapse = ", ")
-  vars <- append(vars, var)
-  results <- data.frame(var = var) %>%
-    cbind(rslts_i$AUC_summary) %>%
-    cbind(rslts_i$AUCPR_summary) %>%
-    cbind(rslts_i$NLL_summary)
-  if(i==1){
-    results_df = results
-  } else{
-    results_df = rbind(results_df, results)
-  }
-}
-
-save.image(file=here("data", "rdata", "05_VIA_sl3_rf_medianModeImput.RData"))
+# predicts <- list()
+# var_imp <- list()
+# top_picks <- list()
+# vars <- c()
+# 
+# for(i in 1:length(exp_var_lists)){
+#   cat("\n", i, ". \nIncluding", exp_var_lists[[i]], "in the predictive model: \n")
+#   df_sl3 <- get_df_sl(sets = exp_var_lists[[i]],
+#                    prev_block = F,
+#                    inputation = "median_mode")
+#   cat("     data dim:", dim(df_sl3))
+# 
+#   rslts_i <- run_sl(df_sl3, rf_only = T, check_VIA = T)
+# 
+#   predicts[[i]] = rslts_i$sl_fit$predict()
+#   var_imp[[i]] = rslts_i$importance_measure
+#   top_picks[[i]] <- rslts_i$importance_measure$covariate[1:10]
+#   var <- paste0(exp_var_lists[[i]], collapse = ", ")
+#   vars <- append(vars, var)
+#   results <- data.frame(var = var) %>%
+#     cbind(rslts_i$AUC_summary) %>%
+#     cbind(rslts_i$AUCPR_summary) %>%
+#     cbind(rslts_i$NLL_summary)
+#   if(i==1){
+#     results_df = results
+#   } else{
+#     results_df = rbind(results_df, results)
+#   }
+# }
+# 
+# save.image(file=here("data", "rdata", "05_VIA_sl3_rf_medianModeImput.RData"))
 ```
 
 ### model performances
@@ -475,36 +493,60 @@ results_df_medianModeImput_wPrevB <- results_df
 
 
 
-```{r, fig.width=4, fig.height=3}
-# results_df_medianModeImput$imputation_block = "MedianMode, one 12h-window"
-# results_df_medianModeImput_wPrevB$imputation_block = "MedianMode, two 12h-windows"
-# results_df_randomImput$imputation_block = "Random,     one 12h-window"
-# results_df_randomImput_wPrevB$imputation_block = "Random,     two 12h-windows"
+```{r, fig.width=7, fig.height=4}
+# results_df <- results_df_medianModeImput %>% mutate(imputation_block = "MedianMode, one 12h-window") %>%
+#   rbind(results_df_medianModeImput_wPrevB %>% mutate(imputation_block = "MedianMode, two 12h-windows")) %>%
+#   rbind(results_df_randomImput %>% mutate(imputation_block = "Random,     one 12h-window")) %>%
+#   rbind(results_df_randomImput_wPrevB %>% mutate(imputation_block = "Random,     two 12h-windows"))
+# 
+# results_df$var <- factor(results_df$var, levels = rev(results_df_medianModeImput$var))
+# 
+# imputation_block_color <- c("MedianMode, one 12h-window" = "#EEB422", 
+#                             "MedianMode, two 12h-windows" = "#EE7600", 
+#                             "Random,     one 12h-window" = "#BCEE68", 
+#                             "Random,     two 12h-windows" = "#1874CD")
 
-# results_df_medianModeImput$blocks = "one 12h-window"
-# results_df_medianModeImput_wPrevB$blocks = "two 12h-windows"
-# results_df_randomImput$blocks = "one 12h-window"
-# results_df_randomImput_wPrevB$blocks = "two 12h-windows"
+results_df <- results_df_medianModeImput %>% mutate(imputation_block = "MedianMode") %>%
+              rbind(results_df_randomImput %>% mutate(imputation_block = "Random")) 
 
-results_df <- results_df_medianModeImput %>% mutate(imputation_block = "MedianMode, one 12h-window") %>%
-  rbind(results_df_medianModeImput_wPrevB %>% mutate(imputation_block = "MedianMode, two 12h-windows")) %>%
-  rbind(results_df_randomImput %>% mutate(imputation_block = "Random,     one 12h-window")) %>%
-  rbind(results_df_randomImput_wPrevB %>% mutate(imputation_block = "Random,     two 12h-windows"))
 
 results_df$var <- factor(results_df$var, levels = rev(results_df_medianModeImput$var))
+results_df$imputation_block <- factor(results_df$imputation_block, levels = c("MedianMode", "Random"))
 
-imputation_block_color <- c("MedianMode, one 12h-window" = "#EEB422", 
-                            "MedianMode, two 12h-windows" = "#EE7600", 
-                            "Random,     one 12h-window" = "#BCEE68", 
-                            "Random,     two 12h-windows" = "#1874CD")
+imputation_block_color <- c("Random" = "#EEB422", "MedianMode" = "#1874CD")
 
-p <- ggplot(data=results_df, aes(x=var, y=auc, ymin=ci_l_auc, ymax=ci_u_auc)) +
+results_df_tmp <- results_df[results_df$var %in% c("W, VS, LT", "n_W, n_VS, h_m_VS, n_LT", "W, VS, LT, n_W, n_VS, h_m_VS, n_LT"), ]
+
+p <- ggplot(data=results_df_tmp, aes(x=var, y=auc, ymin=ci_l_auc, ymax=ci_u_auc)) +
     geom_point(shape=24, size=2, aes(col = imputation_block, fill = imputation_block)) +
     geom_errorbar(shape=24, width=0.3, aes(col = imputation_block)) +
-    # ylim(c(-2,2)) +  # not working
+    # ylim(c(0,1)) +  # not working
     coord_flip() +  # flip coordinates (puts labels on y axis)
     labs(x="Sets of variables")+
     labs(y="AUC") +
+    ggtitle(" ")+
+    theme(plot.title = element_text(hjust = 0.5),
+          axis.title.y = element_blank(),
+          panel.grid.major.x = element_blank(),
+          legend.position="bottom") +
+    scale_color_manual(values = imputation_block_color) +
+    scale_fill_manual(values = imputation_block_color) + 
+    guides(fill=guide_legend(title="Imputation method", nrow = 1),
+           col=guide_legend(title="Imputation method", nrow = 1)) +
+   labs(title = "AUC Performances in Random Forest Models
+         Across Different Training Data")
+
+p
+
+ggsave(here("VIA_rf_AUC.png"), p, width = 7, height = 4, dpi = 1200)
+
+p2 <- ggplot(data=results_df_tmp, aes(x=var, y=NLL, ymin=ci_l_nll, ymax=ci_u_nll)) +
+    geom_point(shape=24, size=2, aes(col = imputation_block, fill = imputation_block)) +
+    geom_errorbar(shape=24, width=0.3, aes(col = imputation_block)) +
+    # ylim(c(0,1)) +  # not working
+    coord_flip() +  # flip coordinates (puts labels on y axis)
+    labs(x="Sets of variables")+
+    labs(y="Negative Log Likelihood") +
     ggtitle(" ")+
     theme(plot.title = element_text(size=8.6, hjust = 0.5),
           axis.title.y = element_blank(),
@@ -515,12 +557,12 @@ p <- ggplot(data=results_df, aes(x=var, y=auc, ymin=ci_l_auc, ymax=ci_u_auc)) +
           legend.position="bottom") +
     scale_color_manual(values = imputation_block_color) +
     scale_fill_manual(values = imputation_block_color) + 
-    guides(fill=guide_legend(title="Imputation method, # windows", nrow = 2),
-           col=guide_legend(title="Imputation method, # windows", nrow = 2)) 
+    guides(fill=guide_legend(title="Imputation method", nrow = 1),
+           col=guide_legend(title="Imputation method", nrow = 1)) 
 
-p
+p2
 
-ggsave("VIA_rf_performances.png", p, width = 9, height = 6, dpi = 1200)
+
 ```
 
 
