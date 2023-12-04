@@ -140,8 +140,8 @@ df_sl3 <- get_df_sl(sets = c("W", "VS", "LT", "n_W", "n_VS", "h_m_VS", "n_LT"), 
 
 df_sl3 <- df_sl3 %>% select(-half_day)
 
-set.seed(123)
-df_sl3 <- df_sl3[c(sample(nrow(df_sl3), 100), which(df_sl3$Y_t_plus_1 == 1)), ]
+# set.seed(123)
+# df_sl3 <- df_sl3[c(sample(nrow(df_sl3), 100), which(df_sl3$Y_t_plus_1 == 1)), ]
 ## define sl3 task
 
 # define the folds with clusters and stratification
