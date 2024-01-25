@@ -34,14 +34,15 @@ library(RColorBrewer)
 library(gplots)
 library(here)
 library(gtsummary)
+library(table1)
 ```
 
 
 ```{r setup, include = FALSE}
-plotFolder <- here("results","images", "v2", "EDA")
+plotFolder <- here("results","images", "03_EDA")
 if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
 
-rdataFolder <- here("data", "data_v2", "rdata")
+rdataFolder <- here("data", "rdata")
 
 knitr::opts_chunk$set(
   cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=FALSE,
@@ -57,12 +58,22 @@ set.seed(123)
 ```{r}
 load(here(rdataFolder, "02_2_varFusion.RData"))
 
-PreprocessDataFolder <- here("data", "data_v2", "DataPreprocessing")
+PreprocessDataFolder <- here("data", "DataPreprocessing")
 
-df <- read.csv(here(PreprocessDataFolder, "02_3_data_complt_blocks.csv"), row.names = 1, header = T)  
-df_imp <- read.csv(here(PreprocessDataFolder, "02_3_data_imputed_complt_blocks.csv"), row.names = 1, header = T)
-df_imp$Y_t_plus_1[df_imp$Y_t_plus_1 == 2] = 0
+df <- read.csv(here(PreprocessDataFolder,"02_3_data_all_blocks.csv"), row.names = 1, header = T)  
+df_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_imputed_all_blocks.csv"), row.names = 1, header = T)
 ```
+
+```{r}
+# discharged within the first 24 hours
+df_tmp <- df[df$half_day <= 2, ]
+discharge_in24_id <- df_tmp$ICUSTAY_ID[df_tmp$Y_t == 2]
+
+df <- df[! df$ICUSTAY_ID %in% discharge_in24_id, ]
+df_imp <- df_imp[! df_imp$ICUSTAY_ID %in% discharge_in24_id, ]
+```
+
+
 
 ```{r}
 dim(df_imp)
@@ -76,6 +87,48 @@ length(unique(data_ids$SUBJECT_ID))
 length(unique(data_ids$ICUSTAY_ID))
 ```
 
+# Table1
+```{r}
+df_tmp1 <- merge(df %>% dplyr::select(ICUSTAY_ID, Y_t_plus_1, AGE, GENDER_F, INSURANCE_Y, RELIGION_Chrt, MARITAL_PARTN, LANGUAGE_ENGL, ETHNICITY_W, ETHNICITY_B, ETHNICITY_A, ETHNICITY_H, ETHNICITY_O), 
+                 data_ids[,c("SUBJECT_ID", "ICUSTAY_ID")],
+                 by = "ICUSTAY_ID") 
+sub_1 <- unique(df_tmp1$SUBJECT_ID[df_tmp1$Y_t_plus_1==1])
+sub_0 <- unique(df_tmp1$SUBJECT_ID[! df_tmp1$SUBJECT_ID %in% sub_1])
+df_tmp1 <- df_tmp1[df_tmp1$SUBJECT_ID %in% c(sub_1, sub_0), ] %>% select(-ICUSTAY_ID) %>% select(-Y_t_plus_1)
+df_tmp1$ICUMortality <- 0
+df_tmp1$ICUMortality[df_tmp1$SUBJECT_ID %in% sub_1] <- 1
+df_tmp1 <- unique(df_tmp1)
+
+
+df_tmp1$Gender <- ifelse(is.na(df_tmp1$GENDER_F), NA, ifelse(df_tmp1$GENDER_F == 1, "Female", "Male"))
+df_tmp1$Insurance <- ifelse(is.na(df_tmp1$INSURANCE_Y), NA, ifelse(df_tmp1$INSURANCE_Y == 1, "Yes", "No"))
+df_tmp1$Religion <- ifelse(is.na(df_tmp1$RELIGION_Chrt), NA, ifelse(df_tmp1$RELIGION_Chrt == 1, "Christian", "Not Christian"))
+df_tmp1$Partner <- ifelse(is.na(df_tmp1$MARITAL_PARTN), NA, ifelse(df_tmp1$MARITAL_PARTN == 1, "Partner", "No Partner"))
+df_tmp1$Language <- ifelse(is.na(df_tmp1$LANGUAGE_ENGL), NA, ifelse(df_tmp1$LANGUAGE_ENGL == 1, "English", "Not English"))
+df_tmp1$Ethnicity <- NA
+df_tmp1$Ethnicity[df_tmp1$ETHNICITY_W == 1] <- "White"
+df_tmp1$Ethnicity[df_tmp1$ETHNICITY_B == 1] <- "Black"
+df_tmp1$Ethnicity[df_tmp1$ETHNICITY_A == 1] <- "Asian"
+df_tmp1$Ethnicity[df_tmp1$ETHNICITY_H == 1] <- "Hispanic"
+df_tmp1$Ethnicity[df_tmp1$ETHNICITY_O == 1] <- "Other"
+df_tmp1$Age = df_tmp1$AGE
+
+df_tmp1$Ethnicity <- factor(df_tmp1$Ethnicity, levels = c("White","Black","Hispanic", "Asian", "Other"))
+df_tmp1$Partner <- factor(df_tmp1$Partner, levels = c("Partner","No Partner"))
+df_tmp1$Insurance <- factor(df_tmp1$Insurance, levels = c("Yes","No"))
+
+df_tmp1 <- df_tmp1 %>% select(SUBJECT_ID, ICUMortality, Age, Gender, Religion, Partner, Language, Ethnicity, Insurance)
+
+length(sub_1)
+length(sub_0)
+dim(df_tmp1)
+
+t <- table1(~ Age + Gender + Religion + Partner + Language +  Ethnicity + Insurance| ICUMortality, 
+       data=df_tmp1,
+       render.continuous=c(.="Mean (SD)", 
+                           .="Median (IQR)"))
+
+```
 
 # Outcome Variable
 ```{r outcome_distribution, fig.width=5, fig.height=3}

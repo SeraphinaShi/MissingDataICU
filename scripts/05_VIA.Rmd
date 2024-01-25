@@ -53,23 +53,16 @@ df_r_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_random_imputed_complt_
 ```
 
 ```{r}
-ICUSTAYS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "ICUSTAYS.csv")) %>% 
-  select(SUBJECT_ID, HADM_ID, ICUSTAY_ID)
+# discharged within the first 24 hours
+df_tmp <- df[df$half_day <= 2, ]
+discharge_in24_id <- df_tmp$ICUSTAY_ID[df_tmp$Y_t == 2]
 
-table <- df %>%
-  select(ICUSTAY_ID, AGE, GENDER_F, MARITAL_PARTN, LANGUAGE_ENGL, RELIGION_Chrt, ETHNICITY_W, ETHNICITY_B, ETHNICITY_A, ETHNICITY_H, ETHNICITY_O, INSURANCE_Y, Y_t_plus_1) %>%
-  unique() %>% 
-  merge(ICUSTAYS, by = "ICUSTAY_ID") %>%
-  select(SUBJECT_ID, AGE, GENDER_F, MARITAL_PARTN, LANGUAGE_ENGL, RELIGION_Chrt, ETHNICITY_W, ETHNICITY_B, ETHNICITY_A, ETHNICITY_H, ETHNICITY_O, INSURANCE_Y, Y_t_plus_1) %>%
-  unique() %>%
-  tbl_summary(
-    by = Y_t_plus_1,  # Add this line to stratify by 'outcome'
-    statistic = list(all_categorical() ~ "{n} ({p}%)"),
-    digits = list(~ c(0, 1, 1)),
-    missing_text = "(Missing)"
-  ) %>%
-  add_overall()
+df <- df[! df$ICUSTAY_ID %in% discharge_in24_id, ]
+df_imp <- df_imp[! df_imp$ICUSTAY_ID %in% discharge_in24_id, ]
+df_r_imp <- df_r_imp[! df_r_imp$ICUSTAY_ID %in% discharge_in24_id, ]
 ```
+
+
 
 ```{r}
 cat("Missing value percentage for each column in the data: \n")
@@ -302,6 +295,10 @@ exp_var_lists <- list(c("W", "VS", "LT"),
 ```
 
 
+```{r}
+# load(here("data", "rdata", "05_VIA_sl3_all.RData"))
+```
+
 ## Random (Unifrom) Imputation
 ```{r}
 # predicts <- list()
@@ -399,113 +396,9 @@ results_df_medianModeImput <- results_df
 ```
 
 
-# Train predictive models with current and previsous 12 hour time block data
-Note that when we include the data from previous 12-hour time block in the predictive model, we are excluding the 1st 12-hour time block because it dose not the previsous time block (and we don't want to impute/create the entire 12-hour time block that doesn't exist).
-
-## Random Imputation
-```{r}
-# predicts <- list()
-# var_imp <- list()
-# top_picks <- list()
-# vars <- c()
-# 
-# for(i in 1:length(exp_var_lists)){  
-#   cat("\n", i, ". \nIncluding", exp_var_lists[[i]], "in the predictive model: \n")
-#   df_sl3 <- sub_df(sets = exp_var_lists[[i]],
-#                    prev_block = T, 
-#                    inputation = "random")
-#   cat("     data dim:", dim(df_sl3))
-#   source(here("scripts", "04_VIA_sl3_rf_1_template.R"))
-#   
-#   predicts[[i]] = fit$predict()
-#   var_imp[[i]] = importance_measure
-#   top_picks[[i]] <- importance_measure$covariate[1:10]
-#   var <- paste0(exp_var_lists[[i]], collapse = ", ")
-#   vars <- append(vars, var)
-#   results <- data.frame(var = var) %>%
-#     cbind(cv_risk_table_AUC) %>% 
-#     cbind(cv_risk_table_AUCPR) %>% 
-#     cbind(cv_risk_table_NLL)
-#   if(i==1){
-#     results_df = results
-#   } else{
-#     results_df = rbind(results_df, results)
-#   }
-# }
-# 
-# save.image(file=here("data", "rdata", "04_VIA_sl3_rf_randomImput_w_prevBlock.RData"))
-```
-
-```{r}
-load(here("data", "rdata", "04_VIA_sl3_rf_randomImput_w_prevBlock.RData"))
-print(results_df %>% select(auc, ci_l_auc, ci_u_auc, aucpr, ci_l_aucpr, ci_u_aucpr, NLL, ci_l_nll, ci_u_nll))
-
-write.csv(results_df, file = here("results", "summary_tables", "04_VIA_sl3_rf_randomImpt_w_prevBlock_moldels_preformances_summary.csv"))
-
-results_df_randomImput_wPrevB <- results_df
-```
-
-
-### Impute with mode or median
-```{r}
-# predicts <- list()
-# var_imp <- list()
-# top_picks <- list()
-# vars <- c()
-# 
-# for(i in 1:length(exp_var_lists)){  
-#   cat("\n", i, ". \nIncluding", exp_var_lists[[i]], "in the predictive model: \n")
-#   df_sl3 <- sub_df(sets = exp_var_lists[[i]],
-#                    prev_block = T, 
-#                    inputation = "median_mode")
-#   cat("     data dim:", dim(df_sl3))
-#   source(here("scripts", "04_VIA_sl3_rf_1_template.R"))
-#   
-#   predicts[[i]] = fit$predict()
-#   var_imp[[i]] = importance_measure
-#   top_picks[[i]] <- importance_measure$covariate[1:10]
-#   var <- paste0(exp_var_lists[[i]], collapse = ", ")
-#   vars <- append(vars, var)
-#   results <- data.frame(var = var) %>%
-#     cbind(cv_risk_table_AUC) %>% 
-#     cbind(cv_risk_table_AUCPR) %>% 
-#     cbind(cv_risk_table_NLL)
-#   if(i==1){
-#     results_df = results
-#   } else{
-#     results_df = rbind(results_df, results)
-#   }
-# }
-# 
-# save.image(file=here("data", "rdata", "04_VIA_sl3_rf_medianModeImput_w_prevBlock.RData"))
-```
-
-```{r}
-load(here("data", "rdata", "04_VIA_sl3_rf_medianModeImput_w_prevBlock.RData"))
-print(results_df %>% select(auc, ci_l_auc, ci_u_auc, aucpr, ci_l_aucpr, ci_u_aucpr, NLL, ci_l_nll, ci_u_nll))
-
-write.csv(results_df, file = here("results", "summary_tables", "04_VIA_sl3_rf_medianModeImput_w_prevBlock_moldels_preformances_summary.csv"))
-
-results_df_medianModeImput_wPrevB <- results_df
-```
-
-
-
 
 
 ```{r, fig.width=7, fig.height=4}
-# results_df <- results_df_medianModeImput %>% mutate(imputation_block = "MedianMode, one 12h-window") %>%
-#   rbind(results_df_medianModeImput_wPrevB %>% mutate(imputation_block = "MedianMode, two 12h-windows")) %>%
-#   rbind(results_df_randomImput %>% mutate(imputation_block = "Random,     one 12h-window")) %>%
-#   rbind(results_df_randomImput_wPrevB %>% mutate(imputation_block = "Random,     two 12h-windows"))
-# 
-# results_df$var <- factor(results_df$var, levels = rev(results_df_medianModeImput$var))
-# 
-# imputation_block_color <- c("MedianMode, one 12h-window" = "#EEB422", 
-#                             "MedianMode, two 12h-windows" = "#EE7600", 
-#                             "Random,     one 12h-window" = "#BCEE68", 
-#                             "Random,     two 12h-windows" = "#1874CD")
-
 results_df <- results_df_medianModeImput %>% mutate(imputation_block = "MedianMode") %>%
               rbind(results_df_randomImput %>% mutate(imputation_block = "Random")) 
 
@@ -516,6 +409,8 @@ results_df$imputation_block <- factor(results_df$imputation_block, levels = c("M
 imputation_block_color <- c("Random" = "#EEB422", "MedianMode" = "#1874CD")
 
 results_df_tmp <- results_df[results_df$var %in% c("W, VS, LT", "n_W, n_VS, h_m_VS, n_LT", "W, VS, LT, n_W, n_VS, h_m_VS, n_LT"), ]
+
+
 
 p <- ggplot(data=results_df_tmp, aes(x=var, y=auc, ymin=ci_l_auc, ymax=ci_u_auc)) +
     geom_point(shape=24, size=2, aes(col = imputation_block, fill = imputation_block)) +
@@ -528,17 +423,15 @@ p <- ggplot(data=results_df_tmp, aes(x=var, y=auc, ymin=ci_l_auc, ymax=ci_u_auc)
     theme(plot.title = element_text(hjust = 0.5),
           axis.title.y = element_blank(),
           panel.grid.major.x = element_blank(),
-          legend.position="bottom") +
+          legend.position="right") +
     scale_color_manual(values = imputation_block_color) +
     scale_fill_manual(values = imputation_block_color) + 
-    guides(fill=guide_legend(title="Imputation method", nrow = 1),
-           col=guide_legend(title="Imputation method", nrow = 1)) +
-   labs(title = "AUC Performances in Random Forest Models
-         Across Different Training Data")
+    guides(fill=guide_legend(title="Imputation", nrow = 2),
+           col=guide_legend(title="Imputation", nrow = 2)) 
 
 p
 
-ggsave(here("VIA_rf_AUC.png"), p, width = 7, height = 4, dpi = 1200)
+ggsave(here("VIA_rf_AUC.png"), p, width = 7, height = 3, dpi = 800)
 
 p2 <- ggplot(data=results_df_tmp, aes(x=var, y=NLL, ymin=ci_l_nll, ymax=ci_u_nll)) +
     geom_point(shape=24, size=2, aes(col = imputation_block, fill = imputation_block)) +
@@ -554,7 +447,7 @@ p2 <- ggplot(data=results_df_tmp, aes(x=var, y=NLL, ymin=ci_l_nll, ymax=ci_u_nll
           axis.text.y = element_text(size=8),
           axis.title.x = element_text(size=8),
           axis.text = element_text(size=7),
-          legend.position="bottom") +
+          legend.position="right") +
     scale_color_manual(values = imputation_block_color) +
     scale_fill_manual(values = imputation_block_color) + 
     guides(fill=guide_legend(title="Imputation method", nrow = 1),
@@ -566,11 +459,23 @@ p2
 ```
 
 
+```{r}
+results_df_tmp
+print(results_df_tmp)
+```
 
 
 
+```{r}
+df_rslt <- results_df_tmp[results_df_tmp$imputation_block == "MedianMode", ]
 
+AUC <- paste0(round(df_rslt$auc, 2), " (", round(df_rslt$ci_l_auc, 2), ", ", round(df_rslt$ci_u_auc, 2), ")")
+NLL <- paste0(round(df_rslt$NLL, 2), " (", round(df_rslt$ci_l_nll, 2), ", ", round(df_rslt$ci_u_nll, 2), ")")
+AUCPR <- paste0(round(df_rslt$aucpr, 2), " (", round(df_rslt$ci_l_aucpr, 2), ", ", round(df_rslt$ci_u_aucpr, 2), ")")
 
+df_rslt <- data.frame(df_rslt$var, NLL, AUC, AUCPR)
+print(df_rslt)
+```
 
 
 

@@ -40,6 +40,14 @@ df_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_imputed_complt_blocks.cs
 df_r_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_random_imputed_complt_blocks.csv"), row.names = 1, header = T)
 
 
+# discharged within the first 24 hours
+df_tmp <- df[df$half_day <= 2, ]
+discharge_in24_id <- df_tmp$ICUSTAY_ID[df_tmp$Y_t == 2]
+df <- df[! df$ICUSTAY_ID %in% discharge_in24_id, ]
+df_imp <- df_imp[! df_imp$ICUSTAY_ID %in% discharge_in24_id, ]
+df_r_imp <- df_r_imp[! df_r_imp$ICUSTAY_ID %in% discharge_in24_id, ]
+
+
 ## ------------------------------------------------------------------------------------------------------------------
 cat("Missing value percentage for each column in the data: \n")
 cat("  Baselines: \n")

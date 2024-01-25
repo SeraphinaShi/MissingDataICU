@@ -1,0 +1,481 @@
+---
+title: "Relationships between baseline characteristics and average mearement rates"
+author: "Seraphina Shi"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+```{r load_lib, include = FALSE, warning=FALSE, message=FALSE, echo=FALSE} 
+# remotes::install_github("tlverse/sl3@devel")
+# remotes::install_github("tlverse/tmle3")
+
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(ggplot2)
+library(here)
+library(future)
+library(gridExtra)
+library(corrplot)
+library(tmle3)
+library(sl3)
+library(table1)
+library(gtsummary)
+library(knitr)
+
+```
+
+```{r setup, include = FALSE}
+plotFolder <- here("results","images", "04_24h")
+if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
+
+rdataFolder <- here("data", "rdata")
+
+knitr::opts_chunk$set(
+  cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=FALSE,
+  results = 'markup', dev='png', dpi=150, fig.align = "center", fig.path=paste0(plotFolder, "/"),
+  cache.path=".cache/",
+  duplicate.label="allow"
+)
+
+set.seed(123)
+```
+
+
+# AGE vs Rates
+
+```{r}
+load(here('data', 'rdata', '04_24h_age.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+  
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list[[i]])
+  print(formatted_table)
+
+  
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list[[i]])
+  print(formatted_table)
+  
+}
+
+```
+
+# Ethnicity vs Rates
+
+
+```{r}
+load(here('data', 'rdata', '04_24h_eth.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+  
+  
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_eth[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_eth[[i]])
+  print(formatted_table)
+
+  
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_eth[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_eth[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_eth[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_eth[[i]])
+  print(formatted_table)
+  
+}
+
+```
+
+
+# Gender vs Rates
+
+```{r}
+load(here('data', 'rdata', '04_24h_gender.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_gender[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_gender[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_gender[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_gender[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_gender[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_gender[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+
+
+
+
+# Insurance vs Rates
+
+```{r}
+load(here('data', 'rdata', '04_24h_insurance.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+
+# Language vs Rates
+
+```{r}
+load(here('data', 'rdata', '04_24h_language.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_language[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_language[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_language[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_language[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_language[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_language[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+# Partner vs Rates
+
+
+
+```{r}
+load(here('data', 'rdata', '04_24h_partner.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_partner[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_partner[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_partner[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_partner[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_partner[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_partner[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+# Religion vs Rates
+
+```{r}
+load(here("data", "rdata", '04_24h_religion.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_religion[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_religion[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_religion[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_religion[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_religion[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_religion[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+
+
+# Care units
+
+
+
+```{r}
+load(here('data', 'rdata', '04_24h_careunit.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+
+df_24h$FIRST_CAREUNIT <- factor(df_24h$FIRST_CAREUNIT)
+
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+}
+
+```
+

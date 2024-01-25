@@ -1,0 +1,1959 @@
+---
+title: "Relationships between baseline characteristics and average mearement rates"
+author: "Seraphina Shi"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+```{r load_lib, include = FALSE, warning=FALSE, message=FALSE, echo=FALSE} 
+# remotes::install_github("tlverse/sl3@devel")
+# remotes::install_github("tlverse/tmle3")
+
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(ggplot2)
+library(here)
+library(future)
+library(gridExtra)
+library(corrplot)
+library(tmle3)
+library(sl3)
+library(table1)
+library(gtsummary)
+library(knitr)
+
+```
+
+```{r setup, include = FALSE}
+plotFolder <- here("results","images", "04_5d")
+if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
+
+rdataFolder <- here("data", "rdata")
+
+knitr::opts_chunk$set(
+  cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=FALSE,
+  results = 'markup', dev='png', dpi=150, fig.align = "center", fig.path=paste0(plotFolder, "/"),
+  cache.path=".cache/",
+  duplicate.label="allow"
+)
+
+set.seed(123)
+```
+
+# Prepare
+
+```{r}
+load(here(rdataFolder, "02_2_varFusion.RData"))
+
+PreprocessDataFolder <- here("data", "DataPreprocessing")
+
+df <- read.csv(here(PreprocessDataFolder,"02_3_data_all_blocks.csv"), row.names = 1, header = T)  
+df_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_imputed_all_blocks.csv"), row.names = 1, header = T)
+```
+
+```{r}
+# discharged within the first 24 hours
+df_tmp <- df[df$half_day <= 2, ]
+discharge_in24_id <- df_tmp$ICUSTAY_ID[df_tmp$Y_t == 2]
+
+df <- df[! df$ICUSTAY_ID %in% discharge_in24_id, ]
+df_imp <- df_imp[! df_imp$ICUSTAY_ID %in% discharge_in24_id, ]
+```
+
+```{r}
+data_ids <- read.csv(here(PreprocessDataFolder,"data_ids.csv"), row.names = 1, header = T)  
+
+data_ids <- data_ids[data_ids$ICUSTAY_ID %in% df$ICUSTAY_ID, ]
+length(unique(data_ids$SUBJECT_ID))
+length(unique(data_ids$ICUSTAY_ID))
+```
+
+```{r, results='asis'}
+df_tmp <- df_imp %>% 
+  group_by(ICUSTAY_ID) %>% 
+  mutate(outcome = max(Y_t)) %>%
+  dplyr::select(ICUSTAY_ID, half_day, outcome, Y_t, Y_t_plus_1, everything()) %>%
+  ungroup() %>%
+  mutate(outcome = as.character(outcome),
+         Y_t = as.character(Y_t))
+
+
+df_5d_1 <- df_tmp %>%
+  dplyr::select(ICUSTAY_ID, outcome) %>%
+  unique()
+
+df_5d_2 <- df_tmp %>% 
+  dplyr::select(unname(c("ICUSTAY_ID", 
+                         var_name_list$num_vitals, 
+                         var_name_list$hours_missing_vitals, 
+                         var_name_list$num_labs))) %>%
+  group_by(ICUSTAY_ID) %>% 
+  summarise(across(everything(), sum))
+
+df_5d_3 <- df_tmp %>% 
+  dplyr::select(unname(c("ICUSTAY_ID", 
+                         var_name_list$num_baselines, 
+                         var_name_list$baselines, 
+                         var_name_list$vitals, 
+                         var_name_list$labs))) %>%
+  group_by(ICUSTAY_ID) %>% 
+  summarise(across(everything(), mean))
+
+df_5d <- merge(df_5d_1, df_5d_2, by="ICUSTAY_ID") %>%
+  merge(df_5d_3, by="ICUSTAY_ID")
+rm(df_5d_1, df_5d_2, df_5d_3, df_tmp)
+
+df_5d$outcome[df_5d$outcome == "0"] = "Longer ICU Stay"
+df_5d$outcome[df_5d$outcome == "1"] = "ICU Death"
+df_5d$outcome[df_5d$outcome == "2"] = "Live Discharge"
+```
+
+
+
+Proportion of whether died within the 24h:
+```{r}
+table1(~outcome, data = df_5d)
+```
+
+```{r}
+# standardize the measurement rates for patients that died within the first 24 hours
+library(lubridate)
+ADMISSIONS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "ADMISSIONS.csv")) %>% 
+  select(SUBJECT_ID, HADM_ID, DEATHTIME)
+PATIENTS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "PATIENTS.csv")) %>% 
+  select(SUBJECT_ID, DOD_SSN)
+ICUSTAYS <- read.csv(here("data","raw_data","mimic-iii-clinical-database-1.4", "ICUSTAYS.csv")) %>% 
+  select(SUBJECT_ID, HADM_ID, ICUSTAY_ID, INTIME, OUTTIME)
+
+df_Y <- ADMISSIONS %>% 
+  merge(PATIENTS, by = "SUBJECT_ID", all = T) %>%
+  merge(ICUSTAYS, by = c("SUBJECT_ID", "HADM_ID"), all = T) %>%
+  unique()
+
+df_Y$DOD_SSN[is.na(df_Y$DOD_SSN)] = df_Y$DEATHTIME[is.na(df_Y$DOD_SSN)]
+df_Y$DEATHTIME[df_Y$DEATHTIME == ""] =  df_Y$DOD_SSN[df_Y$DEATHTIME == ""]
+
+df_Y <- df_Y %>% 
+  mutate(INTIME =  ymd_hms(INTIME),
+         OUTTIME = ymd_hms(OUTTIME),
+         DEATHTIME = ymd_hms(DEATHTIME),
+         DISCHARGE_AFTER_ICUS_IN_hours = (as.numeric(difftime(OUTTIME, INTIME))/(60*60)),
+         DEATH_AFTER_ICUS_IN_hours =  (as.numeric(difftime(DEATHTIME, INTIME))/60)
+         ) 
+
+df_Y <- df_Y %>%  rowwise() %>%
+  mutate(ICU_length_hours = min(c(DISCHARGE_AFTER_ICUS_IN_hours, DEATH_AFTER_ICUS_IN_hours), na.rm = T)) %>%
+  select(ICUSTAY_ID, ICU_length_hours) 
+
+
+df_5d <- merge(df_5d, df_Y, by = "ICUSTAY_ID")
+
+df_5d_1 <- df_5d[df_5d$outcome != "Longer ICU Stay", ] 
+df_5d_1$less_5d <- 1
+
+df_5d_2 <- df_5d %>% filter(outcome=="Longer ICU Stay")
+df_5d_2$less_5d <- 0
+
+for (var in c(var_name_list$hours_missing_vitals, var_name_list$num_vitals, var_name_list$num_labs)) {
+  df_5d_1[var] = 120 * df_5d_1[var] /  df_5d_1$ICU_length_hours
+}
+
+df_5d <- rbind(df_5d_1, df_5d_2)
+```
+
+
+```{r get_severity_score}
+sofa <- read.csv(here("data", "SeverityScores", "sofa.csv")) 
+sapsii <- read.csv(here("data", "SeverityScores", "sapsii.csv")) 
+
+df_5d <- df_5d %>% 
+  merge(sofa %>% 
+          dplyr::select(icustay_id, sofa) %>% 
+          rename(ICUSTAY_ID = icustay_id), 
+        by="ICUSTAY_ID",
+        all.x = T) %>%
+  merge(sapsii %>% 
+          dplyr::select(icustay_id, sapsii) %>% 
+          rename(ICUSTAY_ID = icustay_id), 
+        by="ICUSTAY_ID",
+        all.x = T)  
+
+```
+
+
+```{r}
+dim(df_5d)
+length(unique(df_5d$ICUSTAY_ID))
+```
+
+```{r prepare_function}
+run_tmle3_outcome_rates <- function(Y, A, confounders){
+  
+  df <- data.frame(Y, A, confounders)
+  node_list <- list(
+    W = names(confounders),
+    A = "A",
+    Y = "Y"
+  )
+  
+  
+  processed <- process_missing(df, node_list)
+  df <- processed$data
+  node_list <- processed$node_list
+  
+  
+  ## Define ATE's outcome levels
+  ate_spec <- tmle_ATE(
+    treatment_level = "1",
+    control_level = "0"
+  )
+  
+  
+  ## Define learners
+  lrn_mean <- Lrnr_mean$new()
+  
+  lrn_glmnet <- Lrnr_glmnet$new()
+  lrn_earth <- Lrnr_earth$new()
+  lrn_tree <- Lrnr_glmtree$new()
+  lrn_tree2 <- Lrnr_rpart$new()
+  lrn_gbm <- Lrnr_lightgbm$new()
+  lrn_rf <- Lrnr_ranger$new()
+  
+  
+  # define metalearners appropriate to data types
+  ls_metalearner <- make_learner( # leaner for binary outcome
+    Lrnr_nnls
+  ) 
+  mn_metalearner <- make_learner(  # learner for multinomial outcome
+    Lrnr_solnp,
+    metalearner_linear_multinomial,
+    loss_loglik_multinomial
+  )
+  c_metalearner <- make_learner(  # learner for continuout outcome
+    Lrnr_solnp,
+    metalearner_linear,
+    loss_squared_error
+  )
+  
+  
+  sl_Y <- Lrnr_sl$new(
+    learners = list(lrn_mean, lrn_glmnet, lrn_tree2, lrn_rf),
+    metalearner = c_metalearner
+  )
+  
+  if(length(unique(A)) == 2){
+    sl_A <- Lrnr_sl$new(
+      learners = list(lrn_glmnet, lrn_tree2, lrn_rf),
+      metalearner = ls_metalearner
+    )
+  } else {
+    sl_A <- Lrnr_sl$new(
+      learners = list(lrn_glmnet, lrn_tree2, lrn_rf),
+      metalearner = mn_metalearner
+    )
+  }
+  
+  
+  learner_list <- list(A = sl_A, Y = sl_Y)
+  
+  
+  # Do it for each level in one step
+  tmle_task <- ate_spec$make_tmle_task(df, node_list)
+  
+  initial_likelihood <- ate_spec$make_initial_likelihood(
+    tmle_task,
+    learner_list
+  )
+  
+  tsm_spec <- tmle_TSM_all()
+  
+  targeted_likelihood <- Targeted_Likelihood$new(initial_likelihood)
+  all_tsm_params <- tsm_spec$make_params(tmle_task, targeted_likelihood)
+  
+  ate_params <- lapply(all_tsm_params[-1],
+                       function(tsm_param){define_param(
+                         Param_delta,
+                         targeted_likelihood,
+                         delta_param_RR,
+                         list(all_tsm_params[[1]], tsm_param)
+                       )})
+  
+  all_params <- c(all_tsm_params, ate_params)
+  
+  tmle_fit_multiparam_base_cfd <- fit_tmle3(
+    tmle_task, targeted_likelihood, all_params,
+    targeted_likelihood$updater
+  )
+  
+  return(tmle_fit_multiparam_base_cfd)
+}
+
+make_box_plots <- function(df_box, y_vars, x){
+  meltData <- melt(df_box %>% dplyr::select(y_vars, x), id.vars = x) 
+  names(meltData)[1] = "x"
+  if(x == 'age_cat'){
+    meltData$x <- factor(meltData$x, levels = c('18-30', '31-45', '46-65', '>65')) 
+  } else {
+    meltData$x <- as.factor(meltData$x)
+  }
+  meltData$item = sub("^(n_|h_m_)", "", meltData$variable)
+  pi <- ggplot(meltData, aes(x = x, y = value, color = x)) +
+    geom_boxplot(position = position_dodge(width = 1)) +  
+    facet_wrap(~ item, scales = 'free', nrow = 1) +
+    theme_bw() +
+    theme(legend.position = 'none',
+          axis.text.x = element_text(angle = -75, vjust = 0.5, hjust=0),
+          axis.title.x = element_blank(),
+          plot.title = element_text(hjust = 0.5),
+          plot.subtitle = element_text(hjust = 0.5)) +
+    labs(color="x", x = "", y = "count")
+  return(pi)
+}
+
+
+make_box_plots_no_outliers <- function(df_box, y_vars, x){
+  meltData <- melt(df_box %>% dplyr::select(y_vars, x), id.vars = x) 
+  names(meltData)[1] = "x"
+  if(x == 'age_cat'){
+    meltData$x <- factor(meltData$x, levels = c('18-30', '31-45', '46-65', '>65')) 
+  } else {
+    meltData$x <- as.factor(meltData$x)
+  }
+  meltData$item = sub("^(n_|h_m_)", "", meltData$variable)
+  
+  # Custom calculation for the whiskers
+  whisker_data <- meltData %>%
+    group_by(item, x) %>%
+    summarize(lower = min(value),
+              upper = max(value)) %>%
+    ungroup()
+  
+  pi <- ggplot(meltData, aes(x = x, y = value, color = x)) +
+    geom_boxplot(outlier.shape = NA, position = position_dodge(width = 1)) +
+    geom_linerange(data = whisker_data, aes(x = x, ymin = lower, ymax = upper), color = "black") +
+    facet_wrap(~ item, scales = 'free', nrow = 1) +
+    theme_bw() +
+    theme(legend.position = 'none',
+          axis.text.x = element_text(angle = -75, vjust = 0.5, hjust=0),
+          axis.title.x = element_blank(),
+          plot.title = element_text(hjust = 0.5),
+          plot.subtitle = element_text(hjust = 0.5)) +
+    labs(color="x", x = "", y = "count")
+  return(pi)
+}
+
+
+
+make_box_plots_tmle_rlts <- function(df_box, y_type){
+  pi <- ggplot(df_box %>% filter(Y_type == y_type), 
+               aes(x = group)) +
+    geom_errorbar(aes(ymin=lower, ymax=upper, color=group), width=0.7) +
+    geom_point(aes(y=tmle_est, color = group))+
+    facet_wrap(~ Y_name, scales = 'free', nrow = 1) +
+    labs(y="TMLE estimated rates") + # subtitle = 'TMLE estimation with other baseline variables and SOFA score as confounders'
+    theme_bw() +
+    theme(legend.position = 'none',
+          axis.text.x = element_text(angle = -75, vjust = 0.5, hjust=0),
+          axis.title.x = element_blank(),
+          plot.title = element_text(hjust = 0.5))  # plot.subtitle = element_text(hjust = 0.5)
+  
+  return(pi)
+}
+
+make_box_plots_tmle_rlts_text <- function(df_box, y_type){
+  
+  df_tmp <- df_box %>% 
+    filter(Y_type == y_type) %>%
+    mutate(lower_2dgt = round(lower, 2),
+           upper_2dgt = round(upper, 2),
+           tmle_est_2dgt = round(tmle_est, 2))
+  
+  pi <- ggplot(df_tmp, aes(x = group)) +
+    geom_errorbar(aes(ymin=lower, ymax=upper, color=group), width=0.7) +
+    geom_point(aes(y=tmle_est, color = group)) +
+    geom_text(aes(y=upper_2dgt, label=upper_2dgt), vjust=-0.5, color="black") +
+    geom_text(aes(y=lower_2dgt, label=lower_2dgt), vjust=1.5, color="black") +
+    geom_text(aes(y=tmle_est_2dgt, label=tmle_est_2dgt), vjust=1.5, color="black") +
+    facet_wrap(~ Y_name, scales = 'free', nrow = 1) +
+    labs(y="TMLE estimated rates") +
+    theme_bw() +
+    theme(legend.position = 'none',
+          axis.text.x = element_text(angle = -75, vjust = 0.5, hjust=0),
+          axis.title.x = element_blank(),
+          plot.title = element_text(hjust = 0.5))
+  
+  
+  return(pi)
+}
+
+```
+
+
+
+
+# Correlation plots
+## Baseline, vital sign measurement rates, severity scores
+```{r corr_base_n_vital, fig.height = 8, fig.width = 8}
+cor_mat <- cor(df_5d %>% select(var_name_list$baselines,  c("sofa", "sapsii"), var_name_list$num_vitals))
+n_base <- length(var_name_list$baselines) + 2
+n_y <- length(var_name_list$num_vitals)
+corrplot(cor_mat[1:n_base,(n_base-1):(n_base+n_y)], method="color")
+```
+
+## Baseline, vital sign missing rates, severity scores
+```{r corr_base_h_m_vital, fig.height = 8, fig.width = 8}
+cor_mat <- cor(df_5d %>% select(var_name_list$baselines,  c("sofa", "sapsii"), var_name_list$hours_missing_vitals))
+n_base <- length(var_name_list$baselines) + 2
+n_y <- length(var_name_list$hours_missing_vitals)
+corrplot(cor_mat[1:n_base,(n_base-1):(n_base+n_y)], method="color") #mar = c(0, 0, 0, 0)
+```
+
+## Baseline, lab testing rates, severity scores
+```{r corr_base_n_lab, fig.height = 8, fig.width = 8}
+cor_mat <- cor(df_5d %>% select(var_name_list$baselines,  c("sofa", "sapsii"), var_name_list$num_labs))
+n_base <- length(var_name_list$baselines) + 2
+n_y <- length(var_name_list$num_labs)
+corrplot(cor_mat[1:n_base,(n_base-1):(n_base+n_y)], method="color") #mar = c(0, 0, 0, 0)
+```
+
+
+# AGE vs Rates
+## 00. Age distribution
+```{r age_hist}
+cat("Summary of age distribution: \n")
+hist(df_5d$AGE)
+summary(df_5d$AGE)
+age_c = cut(df_5d$AGE,
+            breaks = c(18,30,45,65,101),
+            labels = c("18-30","31-45","46-65",">65"))
+df_5d <- df_5d %>% mutate(age_cat = age_c)
+rm(age_c)
+
+df_5d_all <- df_5d
+
+cat("Summary of age groups: \n")
+table1(~age_cat, data = df_5d)
+
+table1(~sofa+sapsii|age_cat, data = df_5d)
+```
+
+```{r age_severity_Scores, fig.height=3, fig.width=8}
+p1 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = age_cat, y=sofa, col=age_cat)) +
+        theme(legend.position = "none") +
+        labs(x = "Age group", y = "score", title = "SOFA")
+p2 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = age_cat, y=sapsii, col=age_cat)) +
+        theme(legend.position = "none") +
+        labs(x = "Age group", y = "score", title = "SAPS-II")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+```{r, fig.height=3, fig.width=16}
+x = "age_cat"
+
+g <- make_box_plots(df_5d, var_name_list$hours_missing_vitals, x) +
+  labs(title = "Vital Sign Missing Hours") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_h_m.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_vitals, x) +
+  labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_labs, x) +
+  labs(title = "Laboratory Testing Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+```
+
+
+
+```{r, echo=FALSE, results='asis'}
+# baselines = var_name_list$baselines[var_name_list$baselines != "AGE"]
+# y_vars <- c(var_name_list$num_vitals, var_name_list$hours_missing_vitals, var_name_list$num_labs)
+# idx <- 1:length(y_vars)
+# 
+# glmfit_0_rlt_list <- list()
+# glmfit_sofa_rlt_list <- list()
+# glmfit_saps_rlt_list <- list()
+# tmle_fit_base_rlt_list <- list()
+# tmle_fit_base_sofa_rlt_list <- list()
+# tmle_fit_base_saps_rlt_list <- list()
+# 
+# for (i in 1:length(y_vars)) {
+# # for (i in 16:18) {
+#   y = y_vars[i]
+#   cat(paste0("\n## ", i, ". ", y, "\n\n"))
+# 
+#   source('04_rates_5d_template.R')
+# 
+#   glmfit_0_rlt_list[[i]] <- glmfit_0_rlt
+#   glmfit_sofa_rlt_list[[i]] <- glmfit_sofa_rlt
+#   glmfit_saps_rlt_list[[i]] <- glmfit_saps_rlt
+#   tmle_fit_base_rlt_list[[i]] <- tmle_fit_base_rlt
+#   tmle_fit_base_sofa_rlt_list[[i]] <- tmle_fit_base_sofa_rlt
+#   tmle_fit_base_saps_rlt_list[[i]] <- tmle_fit_base_saps_rlt
+# 
+#   print("haha\n\n")
+# }
+# 
+# save.image(here(rdataFolder, '04_5d_age.RData'))
+```
+
+## 0. TMLE estimations plots 
+
+```{r}
+load(here('data', 'rdata', '04_5d_age.RData'))
+source(here("scripts", "04_rates_5d_functions.R"))
+
+plotFolder <- here("results","images", "04_5d")
+```
+
+
+```{r fig.width=16, fig.height=3}
+tmle_fit_base_sofa_rlt_age_all <- do.call("rbind", tmle_fit_base_sofa_rlt_list) %>% as.data.frame()
+
+tmle_fit_base_sofa_rlt_age_all_tsm <- tmle_fit_base_sofa_rlt_age_all %>%
+  filter(type == 'TSM') %>%
+  mutate(group = gsub(".*A=(.*)\\}.*", "\\1", param),
+         Y_type = ifelse(Y %in% var_name_list$num_vitals, "n_vital", 
+                         ifelse(Y %in% var_name_list$hours_missing_vitals, "h_m_vital",
+                                ifelse(Y %in% var_name_list$num_labs, "n_lab", 'other'))),
+         Y_name = sub("^(n_|h_m_)", "", Y))
+
+tmle_fit_base_sofa_rlt_age_all_tsm$group = factor(tmle_fit_base_sofa_rlt_age_all_tsm$group, levels = c('18-30', '31-45', '46-65', '>65'))
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_age_all_tsm, 'h_m_vital') +
+  labs(title = "Vital Sign Missing Hours") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_age_all_tsm, 'n_vital') +
+  labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_age_all_tsm, 'n_lab') +
+  labs(title = "Laboratory Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+```
+
+```{r fig.width=7, fig.height=2.3}
+plotFolder <- here("results","images", "04_5d")
+
+rlts_s <- tmle_fit_base_sofa_rlt_age_all_tsm[tmle_fit_base_sofa_rlt_age_all_tsm$Y_name %in% c("BP", "HR", "TempC"), ]
+g <- make_box_plots_tmle_rlts(rlts_s, 'n_vital') + labs(title = "Vital Sign Measurement Frequencies") + theme(axis.text.x = element_text(angle = 0, vjust = 0, hjust=0.5)) 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n_small.png")), g, width = 7.5, height = 2.3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(rlts_s, 'h_m_vital') + labs(title = "Vital Sign Missing Hours") + theme(axis.text.x = element_text(angle = 0, vjust = 0, hjust=0.5)) 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m_small.png")), g, width = 7.5, height = 2.3, dpi = 1200)
+
+rlts_s <- tmle_fit_base_sofa_rlt_age_all_tsm[tmle_fit_base_sofa_rlt_age_all_tsm$Y_name %in% c("Lac", "lab_grp1", "lab_grp6"), ]
+g <- make_box_plots_tmle_rlts(rlts_s, 'n_lab') + labs(title = "Laboratory Testing Frequencies")   + theme(axis.text.x = element_text(angle = 0, vjust = 0, hjust=0.5)) 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n_small.png")), g, width = 7.5, height = 2.3, dpi = 1200)
+```
+
+
+
+
+```{r fig.width=16, fig.height=3}
+# glmfit_0_rlt_age_all <- do.call("rbind", glmfit_0_rlt_list) %>% as.data.frame()
+# glmfit_0_rlt_age_all$param <- rownames(glmfit_0_rlt_age_all)
+# 
+# 
+# tmle_fit_base_sofa_rlt_age_all_tsm <- glmfit_0_rlt_age_all %>%
+#   mutate(group = gsub(".*A=(.*)\\}.*", "\\1", param),
+#          Y_type = ifelse(Y %in% var_name_list$num_vitals, "n_vital", 
+#                          ifelse(Y %in% var_name_list$hours_missing_vitals, "h_m_vital",
+#                                 ifelse(Y %in% var_name_list$num_labs, "n_lab", 'other'))),
+#          Y_name = sub("^(n_|h_m_)", "", Y))
+# 
+# tmle_fit_base_sofa_rlt_age_all_tsm$group = factor(tmle_fit_base_sofa_rlt_age_all_tsm$group, levels = c('18-30', '31-45', '46-65', '>65'))
+# 
+# g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_age_all_tsm, 'h_m_vital') +
+#   labs(title = "Vital Sign Missing Hours") 
+# g
+# ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m.png")), g, width = 15, height = 3, dpi = 1200)
+# 
+# 
+# g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_age_all_tsm, 'n_vital') +
+#   labs(title = "Vital Sign Measurement Frequencies") 
+# g
+# ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n.png")), g, width = 15, height = 3, dpi = 1200)
+# 
+# 
+# g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_age_all_tsm, 'n_lab') +
+#   labs(title = "Laboratory Testing Frequencies") 
+# g
+# ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+```
+
+
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+  
+  cat("Summary of", y,  "w.r.t.", x, "groups: \n")
+  table_result <- table1(as.formula(paste0("~ ", y, "| ", x)), data = df_5d)
+  cat(knitr::asis_output(table_result))
+  
+  p <- ggplot(data = df_5d) +
+    geom_density(aes_string(x=y, fill=x), binwidth=1) + 
+    facet_wrap(df_5d[,x])
+  ggsave(file=here(plotFolder, paste0(x, "_", i, "_", y, "_EDA.png")), p, width = 6, height = 3, dpi = 1200)
+  plot(p)
+  
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list[[i]])
+  print(formatted_table)
+
+  
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list[[i]])
+  print(formatted_table)
+  
+}
+
+```
+
+# Ethnicity vs Rates
+## Ethnicity distribution
+```{r}
+df_baseline <- read.csv(here("data", "DataPreprocessing", "df_baseline.csv"))  %>% dplyr::select(-X)
+df_5d <- merge(df_5d, df_baseline %>% select(ICUSTAY_ID, ETHNICITY), by="ICUSTAY_ID", all.x = T )
+
+df_5d$ETHNICITY[is.na(df_5d$ETHNICITY)] = "Missing"
+
+df_5d$ethnicity = factor(df_5d$ETHNICITY , levels = c("WHITE", "ASIAN", "BLACK", "HISPANIC", "Other", "Missing"))
+df_5d_all$ethnicity <- df_5d$ethnicity
+
+cat("Summary of ethnicities: \n")
+table1(~ethnicity, data = df_5d)
+
+table1(~sofa+sapsii|ethnicity, data = df_5d)
+```
+
+Ethnicity distribution among patients survived or died in ICU within the first 24 hours
+```{r}
+table1(~ethnicity|outcome, data = df_5d)
+```
+
+
+```{r ethnicity_severity_Scores, fig.height=3, fig.width=8}
+p1 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = ethnicity, y=sofa, col=ethnicity)) +
+        theme(legend.position = "none") +
+        labs(x = "Age group", y = "score", title = "SOFA")
+p2 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = ethnicity, y=sapsii, col=ethnicity)) +
+        theme(legend.position = "none") +
+        labs(x = "Age group", y = "score", title = "SAPS-II")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+```{r, fig.height=3, fig.width=16}
+x = "ethnicity"
+
+g <- make_box_plots(df_5d, var_name_list$hours_missing_vitals, x) +
+  labs(title = "Vital Sign Missing Hours") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_h_m_.png")), g, width = 11, height = 3, dpi = 1200)
+
+g <- make_box_plots(df_5d, var_name_list$num_vitals, x) +
+  labs(title = "Vital Sign Measurement Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_n.png")), g, width = 11, height = 3, dpi = 1200)
+
+g <- make_box_plots(df_5d, var_name_list$num_labs, x) +
+  labs(title = "Lab Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 11, height = 3, dpi = 1200)
+
+```
+
+
+```{r}
+# x = "ethnicity"
+# baselines = var_name_list$baselines[! var_name_list$baselines %in% c("ETHNICITY_W", "ETHNICITY_B", "ETHNICITY_A", "ETHNICITY_H", "ETHNICITY_O")]
+# y_vars <- c(var_name_list$num_vitals, var_name_list$hours_missing_vitals, var_name_list$num_labs)
+# idx <- 1:length(y_vars)
+# 
+# glmfit_0_rlt_list_eth <- list()
+# glmfit_sofa_rlt_list_eth  <- list()
+# glmfit_saps_rlt_list_eth  <- list()
+# tmle_fit_base_rlt_list_eth  <- list()
+# tmle_fit_base_sofa_rlt_list_eth  <- list()
+# tmle_fit_base_saps_rlt_list_eth  <- list()
+# 
+# for (i in 1:length(y_vars)) {
+# # for (i in 16:18) {
+#   y = y_vars[i]
+#   cat(paste0("\n## ", i, ". ", y, "\n\n"))
+# 
+#   source(' 04_rates_5d_template.R')
+# 
+#   glmfit_0_rlt_list_eth[[i]] <- glmfit_0_rlt
+#   glmfit_sofa_rlt_list_eth[[i]] <- glmfit_sofa_rlt
+#   glmfit_saps_rlt_list_eth[[i]] <- glmfit_saps_rlt
+#   tmle_fit_base_rlt_list_eth[[i]] <- tmle_fit_base_rlt
+#   tmle_fit_base_sofa_rlt_list_eth[[i]] <- tmle_fit_base_sofa_rlt
+#   tmle_fit_base_saps_rlt_list_eth[[i]] <- tmle_fit_base_saps_rlt
+# 
+#   print("haha\n\n")
+# }
+# save.image(here('04_5d_eth.RData'))
+
+```
+
+
+## 0. TMLE estimations plots 
+
+```{r}
+load(here('data', 'rdata', '04_5d_eth.RData'))
+source(here("scripts", "04_rates_5d_functions.R"))
+
+plotFolder <- here("results","images", "04_5d")
+```
+
+
+```{r fig.width=16, fig.height=3}
+tmle_fit_base_sofa_rlt_eth_all <- do.call("rbind", tmle_fit_base_sofa_rlt_list_eth) %>% as.data.frame()
+
+tmle_fit_base_sofa_rlt_eth_all_tsm <- tmle_fit_base_sofa_rlt_eth_all %>%
+  filter(type == 'TSM') %>%
+  mutate(group = gsub(".*A=(.*)\\}.*", "\\1", param),
+         Y_type = ifelse(Y %in% var_name_list$num_vitals, "n_vital", 
+                         ifelse(Y %in% var_name_list$hours_missing_vitals, "h_m_vital",
+                                ifelse(Y %in% var_name_list$num_labs, "n_lab", 'other'))),
+         Y_name = sub("^(n_|h_m_)", "", Y))
+
+tmle_fit_base_sofa_rlt_eth_all_tsm$group = factor(tmle_fit_base_sofa_rlt_eth_all_tsm$group, levels = c("WHITE", "ASIAN", "BLACK", "HISPANIC", "Other"))
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_eth_all_tsm, 'h_m_vital') +
+  labs(title = "Vital Sign Missing Hours") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m.png")), g, width = 15, height = 3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_eth_all_tsm, 'n_vital') +
+  labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_eth_all_tsm, 'n_lab') +
+  labs(title = "Laboratory Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+```
+
+
+```{r fig.width=10, fig.height=2.5}
+rlts_s <- tmle_fit_base_sofa_rlt_eth_all_tsm[tmle_fit_base_sofa_rlt_eth_all_tsm$Y_name %in% c("BP", "HR", "RR", "SpO2", "TempC"), ]
+g <- make_box_plots_tmle_rlts(rlts_s, 'n_vital') + labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n_small.png")), g, width = 10.5, height = 2.5, dpi = 1200)
+
+rlts_s <- tmle_fit_base_sofa_rlt_eth_all_tsm[tmle_fit_base_sofa_rlt_eth_all_tsm$Y_name %in% c("HCT", "lab_grp2", "lab_grp4"), ]
+g <- make_box_plots_tmle_rlts(rlts_s, 'n_lab') + labs(title = "Laboratory Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n_small.png")), g, width = 7, height = 2.5, dpi = 1200)
+```
+
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+  
+  # cat("Summary of", y,  "w.r.t.", x, "groups: \n")  
+  # df_5d$ethnicity[is.na(df_5d$ethnicity)] = "Missing"
+  # df_5d$ethnicity = factor(df_5d$ethnicity , levels = c("WHITE", "ASIAN", "BLACK", "HISPANIC", "Other", "Missing"))
+  # 
+  # table_result <- table1(as.formula(paste0("~ ", y, "| ethnicity")), data = df_5d)
+  # cat(knitr::asis_output(table_result))
+  
+  p <- ggplot(data = df_5d) +
+    geom_density(aes_string(x=y, fill=x), binwidth=1) + 
+    facet_wrap(df_5d[,x])
+  ggsave(file=here(plotFolder, paste0(x, "_", i, "_", y, "_EDA.png")), p, width = 6, height = 3, dpi = 1200)
+  plot(p)
+  
+  
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_eth[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_eth[[i]])
+  print(formatted_table)
+
+  
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_eth[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_eth[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_eth[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_eth[[i]])
+  print(formatted_table)
+  
+}
+
+```
+
+
+# Gender vs Rates
+```{r gender_hist}
+df_baseline <- read.csv(here("data", "DataPreprocessing", "df_baseline.csv"), row.names = 1)
+df_5d <- merge(df_5d, df_baseline %>% select(ICUSTAY_ID, GENDER), by="ICUSTAY_ID", all.x = T )
+df_5d$gender = ifelse(df_5d$GENDER == "F", "Female", "Male")
+
+df_5d$gender = factor(df_5d$gender)
+df_5d_all$gender <- df_5d$gender
+
+cat("Summary of gender: \n")
+table1(~gender, data = df_5d)
+
+table1(~sofa+sapsii|gender, data = df_5d)
+```
+
+```{r gender_severity_Scores, fig.height=3, fig.width=8}
+p1 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = gender, y=sofa, col=gender)) +
+        theme(legend.position = "none") +
+        labs(x = "Gender", y = "score", title = "SOFA")
+p2 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = gender, y=sapsii, col=gender)) +
+        theme(legend.position = "none") +
+        labs(x = "Gender", y = "score", title = "SAPS-II")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+```{r, fig.height=3, fig.width=16}
+x = "gender"
+
+g <- make_box_plots(df_5d, var_name_list$hours_missing_vitals, x) +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_h_m_.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_vitals, x) +
+  labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_n.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_labs, x) +
+  labs(title = "Lab Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 11, height = 3, dpi = 1200)
+```
+
+```{r, echo=FALSE, results='asis'}
+# x = 'GENDER_F'
+# baselines = var_name_list$baselines[! var_name_list$baselines %in% c("GENDER_F")]
+# y_vars <- c(var_name_list$num_vitals, var_name_list$hours_missing_vitals, var_name_list$num_labs)
+# 
+# glmfit_0_rlt_list_gender <- list()
+# glmfit_sofa_rlt_list_gender  <- list()
+# glmfit_saps_rlt_list_gender  <- list()
+# tmle_fit_base_rlt_list_gender  <- list()
+# tmle_fit_base_sofa_rlt_list_gender  <- list()
+# tmle_fit_base_saps_rlt_list_gender  <- list()
+# 
+# for (i in 1:length(y_vars)) {
+# # for (i in 16:18) {
+#   y = y_vars[i]
+#   cat(paste0("\n## ", i, ". ", y, "\n\n"))
+# 
+#   source(' 04_rates_5d_template.R')
+# 
+#   glmfit_0_rlt_list_gender[[i]] <- glmfit_0_rlt
+#   glmfit_sofa_rlt_list_gender[[i]] <- glmfit_sofa_rlt
+#   glmfit_saps_rlt_list_gender[[i]] <- glmfit_saps_rlt
+#   tmle_fit_base_rlt_list_gender[[i]] <- tmle_fit_base_rlt
+#   tmle_fit_base_sofa_rlt_list_gender[[i]] <- tmle_fit_base_sofa_rlt
+#   tmle_fit_base_saps_rlt_list_gender[[i]] <- tmle_fit_base_saps_rlt
+# 
+#   print("\n haha\n\n")
+# }
+# save.image(here('04_5d_gender.RData'))
+
+```
+
+
+
+## 0. TMLE estimations plots
+```{r}
+load(here('data', 'rdata', '04_5d_gender.RData'))
+source(here("scripts", "04_rates_5d_functions.R"))
+
+plotFolder <- here("results","images", "04_5d")
+```
+
+
+
+```{r fig.width=16, fig.height=3}
+tmle_fit_base_sofa_rlt_gender_all <- do.call("rbind", tmle_fit_base_sofa_rlt_list_gender) %>% as.data.frame()
+
+tmle_fit_base_sofa_rlt_gender_all_tsm <- tmle_fit_base_sofa_rlt_gender_all %>%
+  filter(type == 'TSM') %>%
+  mutate(group = gsub(".*A=(.*)\\}.*", "\\1", param),
+         Y_type = ifelse(Y %in% var_name_list$num_vitals, "n_vital",
+                         ifelse(Y %in% var_name_list$hours_missing_vitals, "h_m_vital",
+                                ifelse(Y %in% var_name_list$num_labs, "n_lab", 'other'))),
+         Y_name = sub("^(n_|h_m_)", "", Y))
+
+tmle_fit_base_sofa_rlt_gender_all_tsm$group[tmle_fit_base_sofa_rlt_gender_all_tsm$group == 1] = 'Female'
+tmle_fit_base_sofa_rlt_gender_all_tsm$group[tmle_fit_base_sofa_rlt_gender_all_tsm$group == 0] = 'Male'
+
+tmle_fit_base_sofa_rlt_gender_all_tsm$group = factor(tmle_fit_base_sofa_rlt_gender_all_tsm$group)
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_gender_all_tsm, 'h_m_vital') +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_gender_all_tsm, 'n_vital') +
+  labs(title = "Vital Sign Measurement Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_gender_all_tsm, 'n_lab') +
+  labs(title = "Laboratory Testing Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+```
+
+
+```{r fig.width=7, fig.height=2.5}
+plotFolder <- here("results","images", "04_5d")
+
+rlts_s <- tmle_fit_base_sofa_rlt_gender_all_tsm[tmle_fit_base_sofa_rlt_gender_all_tsm$Y_name %in% c("BP", "HR", "TempC"), ]
+g <- make_box_plots_tmle_rlts(rlts_s, 'n_vital') + labs(title = "Vital Sign Measurement Frequencies") + theme(axis.text.x = element_text(angle = 0, vjust = 0, hjust=0.5)) 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n_small.png")), g, width = 7.5, height = 2.3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(rlts_s, 'h_m_vital') + labs(title = "Vital Sign Missing Hours") + theme(axis.text.x = element_text(angle = 0, vjust = 0, hjust=0.5)) 
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m_small.png")), g, width = 7.5, height = 2.3, dpi = 1200)
+
+```
+
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+  cat("Summary of", y,  "w.r.t.", x, "groups: \n")
+  table_result <- table1(as.formula(paste0("~ ", y, "| ", x)), data = df_5d)
+  cat(knitr::asis_output(table_result))
+  
+  p <- ggplot(data = df_5d) +
+    geom_density(aes_string(x=y, fill=x), binwidth=1) +
+    facet_wrap(df_5d[,x])
+  ggsave(file=here(plotFolder, paste0(x, "_", i, "_", y, "_EDA.png")), p, width = 6, height = 3, dpi = 1200)
+  plot(p)
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_gender[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_gender[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_gender[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_gender[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_gender[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_gender[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+
+
+
+
+# Insurance vs Rates
+```{r insurance_hist}
+df_baseline <- read.csv(here("data", "DataPreprocessing", "df_baseline.csv"), row.names = 1)
+df_5d <- merge(df_5d, df_baseline %>% select(ICUSTAY_ID, INSURANCE), by="ICUSTAY_ID", all.x = T )
+
+df_5d$insurance = factor(df_5d$INSURANCE, levels = c('not_insuranced', 'insuranced'))
+df_5d_all$insurance <- df_5d$insurance
+
+cat("Summary of insurance: \n")
+table1(~insurance, data = df_5d)
+
+table1(~sofa+sapsii|insurance, data = df_5d)
+```
+
+```{r insurance_severity_Scores, fig.height=3, fig.width=8}
+p1 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = insurance, y=sofa, col=insurance)) +
+        theme(legend.position = "none") +
+        labs(x = "Insurance", y = "score", title = "SOFA")
+p2 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = insurance, y=sapsii, col=insurance)) +
+        theme(legend.position = "none") +
+        labs(x = "Insurance", y = "score", title = "SAPS-II")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+```{r, fig.height=3, fig.width=16}
+x = "insurance"
+
+g <- make_box_plots(df_5d, var_name_list$hours_missing_vitals, x) +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_h_m_.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_vitals, x) +
+  labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_n.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_labs, x) +
+  labs(title = "Lab Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 11, height = 3, dpi = 1200)
+```
+
+```{r, echo=FALSE, results='asis'}
+# x = 'INSURANCE_Y'
+# baselines = var_name_list$baselines[! var_name_list$baselines %in% c("INSURANCE_Y")]
+# y_vars <- c(var_name_list$num_vitals, var_name_list$hours_missing_vitals, var_name_list$num_labs)
+# 
+# glmfit_0_rlt_list_insurance <- list()
+# glmfit_sofa_rlt_list_insurance  <- list()
+# glmfit_saps_rlt_list_insurance  <- list()
+# tmle_fit_base_rlt_list_insurance  <- list()
+# tmle_fit_base_sofa_rlt_list_insurance  <- list()
+# tmle_fit_base_saps_rlt_list_insurance  <- list()
+# 
+# for (i in 1:length(y_vars)) {
+# # for (i in 16:18) {
+#   y = y_vars[i]
+#   cat(paste0("\n## ", i, ". ", y, "\n\n"))
+# 
+#   source(' 04_rates_5d_template.R')
+# 
+#   glmfit_0_rlt_list_insurance[[i]] <- glmfit_0_rlt
+#   glmfit_sofa_rlt_list_insurance[[i]] <- glmfit_sofa_rlt
+#   glmfit_saps_rlt_list_insurance[[i]] <- glmfit_saps_rlt
+#   tmle_fit_base_rlt_list_insurance[[i]] <- tmle_fit_base_rlt
+#   tmle_fit_base_sofa_rlt_list_insurance[[i]] <- tmle_fit_base_sofa_rlt
+#   tmle_fit_base_saps_rlt_list_insurance[[i]] <- tmle_fit_base_saps_rlt
+# 
+#   print("\n haha\n\n")
+# }
+# save.image(here('04_5d_insurance.RData'))
+
+```
+
+
+
+## 0. TMLE estimations plots
+```{r}
+load(here('data', 'rdata', '04_5d_insurance.RData'))
+source(here("scripts", "04_rates_5d_functions.R"))
+
+plotFolder <- here("results","images", "04_5d")
+```
+
+
+```{r fig.width=16, fig.height=3}
+tmle_fit_base_sofa_rlt_insurance_all <- do.call("rbind", tmle_fit_base_sofa_rlt_list_insurance) %>% as.data.frame()
+
+tmle_fit_base_sofa_rlt_insurance_all_tsm <- tmle_fit_base_sofa_rlt_insurance_all %>%
+  filter(type == 'TSM') %>%
+  mutate(group = gsub(".*A=(.*)\\}.*", "\\1", param),
+         Y_type = ifelse(Y %in% var_name_list$num_vitals, "n_vital",
+                         ifelse(Y %in% var_name_list$hours_missing_vitals, "h_m_vital",
+                                ifelse(Y %in% var_name_list$num_labs, "n_lab", 'other'))),
+         Y_name = sub("^(n_|h_m_)", "", Y))
+
+tmle_fit_base_sofa_rlt_insurance_all_tsm$group[tmle_fit_base_sofa_rlt_insurance_all_tsm$group == 1] = 'insuranced'
+tmle_fit_base_sofa_rlt_insurance_all_tsm$group[tmle_fit_base_sofa_rlt_insurance_all_tsm$group == 0] = 'not_insuranced'
+
+tmle_fit_base_sofa_rlt_insurance_all_tsm$group = factor(tmle_fit_base_sofa_rlt_insurance_all_tsm$group, levels = c('not_insuranced', 'insuranced'))
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_insurance_all_tsm, 'h_m_vital') +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_insurance_all_tsm, 'n_vital') +
+  labs(title = "Vital Sign Measurement Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_insurance_all_tsm, 'n_lab') +
+  labs(title = "Laboratory Testing Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+```
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+  cat("Summary of", y,  "w.r.t.", x, "groups: \n")
+  table_result <- table1(as.formula(paste0("~ ", y, "| ", x)), data = df_5d)
+  cat(knitr::asis_output(table_result))
+  
+  p <- ggplot(data = df_5d) +
+    geom_density(aes_string(x=y, fill=x), binwidth=1) +
+    facet_wrap(df_5d[,x])
+  ggsave(file=here(plotFolder, paste0(x, "_", i, "_", y, "_EDA.png")), p, width = 6, height = 3, dpi = 1200)
+  plot(p)
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_insurance[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+
+# Language vs Rates
+```{r LANGUAGE_hist}
+df_baseline <- read.csv(here("data", "DataPreprocessing", "df_baseline.csv"), row.names = 1)
+df_5d <- merge(df_5d, df_baseline %>% select(ICUSTAY_ID, LANGUAGE), by="ICUSTAY_ID", all.x = T )
+
+df_5d$language <- ifelse(is.na(df_5d$LANGUAGE), "Missing", df_5d$LANGUAGE)
+
+df_5d$language = factor(df_5d$language, levels = c("ENGL", "Other", "Missing"))
+df_5d_all$language <- df_5d$language
+
+
+cat("Summary of language: \n")
+table1(~language, data = df_5d)
+
+table1(~sofa+sapsii|language, data = df_5d)
+```
+
+```{r language_severity_Scores, fig.height=3, fig.width=8}
+p1 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = language, y=sofa, col=language)) +
+        theme(legend.position = "none") +
+        labs(x = "Language", y = "score", title = "SOFA")
+p2 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = language, y=sapsii, col=language)) +
+        theme(legend.position = "none") +
+        labs(x = "Language", y = "score", title = "SAPS-II")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+```{r, fig.height=3, fig.width=16}
+x = "language"
+
+g <- make_box_plots(df_5d, var_name_list$hours_missing_vitals, x) +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_h_m_.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_vitals, x) +
+  labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_n.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_labs, x) +
+  labs(title = "Lab Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 11, height = 3, dpi = 1200)
+```
+
+```{r, echo=FALSE, results='asis'}
+# x = "language"
+# baselines = var_name_list$baselines[! var_name_list$baselines %in% c("LANGUAGE_ENGL")]
+# y_vars <- c(var_name_list$num_vitals, var_name_list$hours_missing_vitals, var_name_list$num_labs)
+# 
+# glmfit_0_rlt_list_language <- list()
+# glmfit_sofa_rlt_list_language  <- list()
+# glmfit_saps_rlt_list_language  <- list()
+# tmle_fit_base_rlt_list_language  <- list()
+# tmle_fit_base_sofa_rlt_list_language  <- list()
+# tmle_fit_base_saps_rlt_list_language  <- list()
+# 
+# for (i in 1:length(y_vars)) {
+#   y = y_vars[i]
+#   cat(paste0("\n## ", i, ". ", y, "\n\n"))
+# 
+#   source(' 04_rates_5d_template.R')
+# 
+#   glmfit_0_rlt_list_language[[i]] <- glmfit_0_rlt
+#   glmfit_sofa_rlt_list_language[[i]] <- glmfit_sofa_rlt
+#   glmfit_saps_rlt_list_language[[i]] <- glmfit_saps_rlt
+#   tmle_fit_base_rlt_list_language[[i]] <- tmle_fit_base_rlt
+#   tmle_fit_base_sofa_rlt_list_language[[i]] <- tmle_fit_base_sofa_rlt
+#   tmle_fit_base_saps_rlt_list_language[[i]] <- tmle_fit_base_saps_rlt
+# 
+#   print("\n haha\n\n")
+# }
+# save.image(here('04_5d_language.RData'))
+
+```
+
+
+
+
+## 0. TMLE estimations plots
+```{r}
+load(here('data', 'rdata', '04_5d_language.RData'))
+source(here("scripts", "04_rates_5d_functions.R"))
+
+plotFolder <- here("results","images", "04_5d")
+```
+
+
+```{r fig.width=16, fig.height=3}
+tmle_fit_base_sofa_rlt_language_all <- do.call("rbind", tmle_fit_base_sofa_rlt_list_language) %>% as.data.frame()
+
+tmle_fit_base_sofa_rlt_language_all_tsm <- tmle_fit_base_sofa_rlt_language_all %>%
+  filter(type == 'TSM') %>%
+  mutate(group = gsub(".*A=(.*)\\}.*", "\\1", param),
+         Y_type = ifelse(Y %in% var_name_list$num_vitals, "n_vital",
+                         ifelse(Y %in% var_name_list$hours_missing_vitals, "h_m_vital",
+                                ifelse(Y %in% var_name_list$num_labs, "n_lab", 'other'))),
+         Y_name = sub("^(n_|h_m_)", "", Y))
+
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_language_all_tsm, 'h_m_vital') +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_language_all_tsm, 'n_vital') +
+  labs(title = "Vital Sign Measurement Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_language_all_tsm, 'n_lab') +
+  labs(title = "Laboratory Testing Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+```
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+  cat("Summary of", y,  "w.r.t.", x, "groups: \n")
+  table_result <- table1(as.formula(paste0("~ ", y, "| ", x)), data = df_5d)
+  cat(knitr::asis_output(table_result))
+  
+  p <- ggplot(data = df_5d) +
+    geom_density(aes_string(x=y, fill=x), binwidth=1) +
+    facet_wrap(df_5d[,x])
+  ggsave(file=here(plotFolder, paste0(x, "_", i, "_", y, "_EDA.png")), p, width = 6, height = 3, dpi = 1200)
+  plot(p)
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_language[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_language[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_language[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_language[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_language[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_language[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+# Partner vs Rates
+```{r marital_hist}
+df_baseline <- read.csv(here("data", "DataPreprocessing", "df_baseline.csv"), row.names = 1)
+df_5d <- merge(df_5d, df_baseline %>% select(ICUSTAY_ID, MARITAL_STATUS), by="ICUSTAY_ID", all.x = T )
+
+df_5d$marital_status = tolower(df_5d$MARITAL_STATUS)
+df_5d$marital_status[is.na(df_5d$marital_status)] = 'Missing'
+df_5d$marital_status = factor(df_5d$marital_status, levels = c("partnered", "not_partnered", "Missing"))
+
+df_5d_all$marital_status <- df_5d$marital_status
+
+
+cat("Summary of marital/partner status: \n")
+table1(~marital_status, data = df_5d)
+
+table1(~sofa+sapsii|marital_status, data = df_5d)
+```
+
+```{r marital_severity_Scores, fig.height=3, fig.width=8}
+p1 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = marital_status, y=sofa, col=marital_status)) +
+        theme(legend.position = "none") +
+        labs(x = "Partner", y = "score", title = "SOFA")
+p2 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = marital_status, y=sapsii, col=marital_status)) +
+        theme(legend.position = "none") +
+        labs(x = "Partner", y = "score", title = "SAPS-II")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+```{r, fig.height=3, fig.width=16}
+x = "marital_status"
+
+g <- make_box_plots(df_5d, var_name_list$hours_missing_vitals, x) +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_h_m_.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_vitals, x) +
+  labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_n.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_labs, x) +
+  labs(title = "Lab Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 11, height = 3, dpi = 1200)
+```
+
+```{r, echo=FALSE, results='asis'}
+# x = 'marital_status'
+# baselines = var_name_list$baselines[! var_name_list$baselines %in% c("MARITAL_PARTN")]
+# y_vars <- c(var_name_list$num_vitals, var_name_list$hours_missing_vitals, var_name_list$num_labs)
+# 
+# glmfit_0_rlt_list_partner <- list()
+# glmfit_sofa_rlt_list_partner  <- list()
+# glmfit_saps_rlt_list_partner  <- list()
+# tmle_fit_base_rlt_list_partner  <- list()
+# tmle_fit_base_sofa_rlt_list_partner  <- list()
+# tmle_fit_base_saps_rlt_list_partner  <- list()
+# 
+# for (i in 1:length(y_vars)) {
+# # for (i in 16:18) {
+#   y = y_vars[i]
+#   cat(paste0("\n## ", i, ". ", y, "\n\n"))
+# 
+#   source(' 04_rates_5d_template.R')
+# 
+#   glmfit_0_rlt_list_partner[[i]] <- glmfit_0_rlt
+#   glmfit_sofa_rlt_list_partner[[i]] <- glmfit_sofa_rlt
+#   glmfit_saps_rlt_list_partner[[i]] <- glmfit_saps_rlt
+#   tmle_fit_base_rlt_list_partner[[i]] <- tmle_fit_base_rlt
+#   tmle_fit_base_sofa_rlt_list_partner[[i]] <- tmle_fit_base_sofa_rlt
+#   tmle_fit_base_saps_rlt_list_partner[[i]] <- tmle_fit_base_saps_rlt
+# 
+#   print("\n haha\n\n")
+# }
+# save.image(here('04_5d_partner.RData'))
+
+```
+
+
+
+
+
+## 0. TMLE estimations plots
+
+```{r}
+load(here('data', 'rdata', '04_5d_partner.RData'))
+source(here("scripts", "04_rates_5d_functions.R"))
+
+plotFolder <- here("results","images", "04_5d")
+```
+
+
+```{r fig.width=16, fig.height=3}
+tmle_fit_base_sofa_rlt_partner_all <- do.call("rbind", tmle_fit_base_sofa_rlt_list_partner) %>% as.data.frame()
+
+tmle_fit_base_sofa_rlt_partner_all_tsm <- tmle_fit_base_sofa_rlt_partner_all %>%
+  filter(type == 'TSM') %>%
+  mutate(group = gsub(".*A=(.*)\\}.*", "\\1", param),
+         Y_type = ifelse(Y %in% var_name_list$num_vitals, "n_vital",
+                         ifelse(Y %in% var_name_list$hours_missing_vitals, "h_m_vital",
+                                ifelse(Y %in% var_name_list$num_labs, "n_lab", 'other'))),
+         Y_name = sub("^(n_|h_m_)", "", Y))
+
+tmle_fit_base_sofa_rlt_partner_all_tsm$group = factor(tmle_fit_base_sofa_rlt_partner_all_tsm$group, levels = c("partnered", "not_partnered", "Missing"))
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_partner_all_tsm, 'h_m_vital') +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_partner_all_tsm, 'n_vital') +
+  labs(title = "Vital Sign Measurement Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_partner_all_tsm, 'n_lab') +
+  labs(title = "Laboratory Testing Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+```
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+  cat("Summary of", y,  "w.r.t.", x, "groups: \n")
+  table_result <- table1(as.formula(paste0("~ ", y, "| ", x)), data = df_5d)
+  cat(knitr::asis_output(table_result))
+  
+  p <- ggplot(data = df_5d) +
+    geom_density(aes_string(x=y, fill=x), binwidth=1) +
+    facet_wrap(df_5d[,x])
+  ggsave(file=here(plotFolder, paste0(x, "_", i, "_", y, "_EDA.png")), p, width = 6, height = 3, dpi = 1200)
+  plot(p)
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_partner[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_partner[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_partner[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_partner[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_partner[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_partner[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+# Religion vs Rates
+```{r religion_hist}
+df_baseline <- read.csv(here("data", "DataPreprocessing", "df_baseline.csv"), row.names = 1)
+df_5d <- merge(df_5d, df_baseline %>% select(ICUSTAY_ID, RELIGION), by="ICUSTAY_ID", all.x = T )
+
+df_5d$religion <- tolower(df_5d$RELIGION)
+df_5d$religion[is.na(df_5d$religion)] <- "Missing"
+
+df_5d$religion[df_5d$religion == 'christian'] = 'Christian'
+df_5d$religion[df_5d$religion == 'other'] = 'Other'
+
+df_5d$religion = factor(df_5d$religion, levels = c("Christian", "Other", "Missing"))
+df_5d_all$religion <- df_5d$religion
+
+
+cat("Summary of religion status: \n")
+table1(~religion, data = df_5d)
+
+table1(~sofa+sapsii|religion, data = df_5d)
+```
+
+```{r religion_Scores, fig.height=3, fig.width=8}
+p1 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = religion, y=sofa, col=religion)) +
+        theme(legend.position = "none") +
+        labs(x = "Religion", y = "score", title = "SOFA")
+p2 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = religion, y=sapsii, col=religion)) +
+        theme(legend.position = "none") +
+        labs(x = "Religion", y = "score", title = "SAPS-II")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+```{r, fig.height=3, fig.width=16}
+x = "religion"
+
+g <- make_box_plots(df_5d, var_name_list$hours_missing_vitals, x) +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_h_m_.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_vitals, x) +
+  labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_n.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_labs, x) +
+  labs(title = "Lab Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 11, height = 3, dpi = 1200)
+```
+
+```{r, echo=FALSE, results='asis'}
+# x = "religion"
+# baselines = var_name_list$baselines[! var_name_list$baselines %in% c("RELIGION_Chrt")]
+# y_vars <- c(var_name_list$num_vitals, var_name_list$hours_missing_vitals, var_name_list$num_labs).
+# 
+# glmfit_0_rlt_list_religion <- list()
+# glmfit_sofa_rlt_list_religion  <- list()
+# glmfit_saps_rlt_list_religion  <- list()
+# tmle_fit_base_rlt_list_religion  <- list()
+# tmle_fit_base_sofa_rlt_list_religion  <- list()
+# tmle_fit_base_saps_rlt_list_religion  <- list()
+# 
+# for (i in 1:length(y_vars)) {
+# # for (i in 16:18) {
+#   y = y_vars[i]
+#   cat(paste0("\n## ", i, ". ", y, "\n\n"))
+# 
+#   source(' 04_rates_5d_template.R')
+# 
+#   glmfit_0_rlt_list_religion[[i]] <- glmfit_0_rlt
+#   glmfit_sofa_rlt_list_religion[[i]] <- glmfit_sofa_rlt
+#   glmfit_saps_rlt_list_religion[[i]] <- glmfit_saps_rlt
+#   tmle_fit_base_rlt_list_religion[[i]] <- tmle_fit_base_rlt
+#   tmle_fit_base_sofa_rlt_list_religion[[i]] <- tmle_fit_base_sofa_rlt
+#   tmle_fit_base_saps_rlt_list_religion[[i]] <- tmle_fit_base_saps_rlt
+# 
+#   print("\n haha\n\n")
+# }
+# save.image(here('04_5d_religion.RData'))
+
+```
+
+
+
+## 0. TMLE estimations plots
+```{r}
+load(here("data", "rdata", '04_5d_religion.RData'))
+source(here("scripts", "04_rates_5d_functions.R"))
+
+plotFolder <- here("results","images", "04_5d")
+```
+
+
+```{r fig.width=16, fig.height=3}
+tmle_fit_base_sofa_rlt_religion_all <- do.call("rbind", tmle_fit_base_sofa_rlt_list_religion) %>% as.data.frame()
+
+tmle_fit_base_sofa_rlt_religion_all_tsm <- tmle_fit_base_sofa_rlt_religion_all %>%
+  filter(type == 'TSM') %>%
+  mutate(group = gsub(".*A=(.*)\\}.*", "\\1", param),
+         Y_type = ifelse(Y %in% var_name_list$num_vitals, "n_vital",
+                         ifelse(Y %in% var_name_list$hours_missing_vitals, "h_m_vital",
+                                ifelse(Y %in% var_name_list$num_labs, "n_lab", 'other'))),
+         Y_name = sub("^(n_|h_m_)", "", Y))
+
+tmle_fit_base_sofa_rlt_religion_all_tsm$group = factor(tmle_fit_base_sofa_rlt_religion_all_tsm$group, levels = c("Christian", "Other", "Missing"))
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_religion_all_tsm, 'h_m_vital') +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_religion_all_tsm, 'n_vital') +
+  labs(title = "Vital Sign Measurement Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_religion_all_tsm, 'n_lab') +
+  labs(title = "Laboratory Testing Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+```
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+  cat("Summary of", y,  "w.r.t.", x, "groups: \n")
+  table_result <- table1(as.formula(paste0("~ ", y, "| ", x)), data = df_5d)
+  cat(knitr::asis_output(table_result))
+  
+  p <- ggplot(data = df_5d) +
+    geom_density(aes_string(x=y, fill=x), binwidth=1) +
+    facet_wrap(df_5d[,x])
+  ggsave(file=here(plotFolder, paste0(x, "_", i, "_", y, "_EDA.png")), p, width = 6, height = 3, dpi = 1200)
+  plot(p)
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_religion[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_religion[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_religion[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_religion[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_religion[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_religion[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+
+
+# Care units
+```{r careunit_hist}
+ICUSTAYS <- read.csv(here("data", "raw_data", "mimic-iii-clinical-database-1.4", "ICUSTAYS.csv"))
+df_5d <- merge(df_5d, ICUSTAYS %>% select(ICUSTAY_ID, FIRST_CAREUNIT), by="ICUSTAY_ID", all.x = T )
+
+df_5d$FIRST_CAREUNIT <- ifelse(is.na(df_5d$FIRST_CAREUNIT), "Missing", df_5d$FIRST_CAREUNIT)
+df_5d_all$FIRST_CAREUNIT <- df_5d$FIRST_CAREUNIT
+
+cat("Summary of first care unit: \n")
+table1(~FIRST_CAREUNIT, data = df_5d)
+
+table1(~sofa+sapsii+less_5d|FIRST_CAREUNIT, data = df_5d)
+
+
+table1(as.formula(paste0("~", paste(c("age_cat", "ethnicity", "gender", "insurance", "language", "marital_status", "religion"), collapse=" + "), "|FIRST_CAREUNIT")) , data = df_5d_all)
+table1(as.formula(paste0("~", paste(var_name_list$hours_missing_vitals, collapse=" + "), "|FIRST_CAREUNIT")) , data = df_5d)
+table1(as.formula(paste0("~", paste(var_name_list$num_vitals, collapse=" + "), "|FIRST_CAREUNIT")) , data = df_5d)
+table1(as.formula(paste0("~", paste(var_name_list$num_labs, collapse=" + "), "|FIRST_CAREUNIT")) , data = df_5d)
+```
+
+```{r, fig.height=3, fig.width=16}
+x = "FIRST_CAREUNIT"
+
+g <- make_box_plots(df_5d, var_name_list$hours_missing_vitals, x) +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_h_m_.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_vitals, x) +
+  labs(title = "Vital Sign Measurement Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_vital_n.png")), g, width = 11, height = 3, dpi = 1200)
+
+
+g <- make_box_plots(df_5d, var_name_list$num_labs, x) +
+  labs(title = "Lab Testing Frequencies") 
+g
+ggsave(file=here(plotFolder, paste0(x, "_box_plot_lab_n.png")), g, width = 11, height = 3, dpi = 1200)
+```
+
+
+```{r careunit_Scores, fig.height=3, fig.width=8}
+p1 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = FIRST_CAREUNIT, y=sofa, col=FIRST_CAREUNIT)) +
+        theme(legend.position = "none") +
+        labs(x = "First Care Unit", y = "score", title = "SOFA")
+p2 <- ggplot(df_5d) +
+        geom_boxplot(aes(x = FIRST_CAREUNIT, y=sapsii, col=FIRST_CAREUNIT)) +
+        theme(legend.position = "none") +
+        labs(x = "First Care Unit", y = "score", title = "SAPS-II")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+```{r, echo=FALSE, results='asis'}
+# x = "FIRST_CAREUNIT"
+# baselines = var_name_list$baselines
+# y_vars <- c(var_name_list$num_vitals, var_name_list$hours_missing_vitals, var_name_list$num_labs)
+# 
+# glmfit_0_rlt_list_careunit <- list()
+# glmfit_sofa_rlt_list_careunit  <- list()
+# glmfit_saps_rlt_list_careunit  <- list()
+# tmle_fit_base_rlt_list_careunit  <- list()
+# tmle_fit_base_sofa_rlt_list_careunit  <- list()
+# tmle_fit_base_saps_rlt_list_careunit  <- list()
+# 
+# for (i in 1:length(y_vars)) {
+# # for (i in 16:18) {
+#   y = y_vars[i]
+#   cat(paste0("\n## ", i, ". ", y, "\n\n"))
+# 
+#   source(' 04_rates_5d_template.R')
+# 
+#   glmfit_0_rlt_list_careunit[[i]] <- glmfit_0_rlt
+#   glmfit_sofa_rlt_list_careunit[[i]] <- glmfit_sofa_rlt
+#   glmfit_saps_rlt_list_careunit[[i]] <- glmfit_saps_rlt
+#   tmle_fit_base_rlt_list_careunit[[i]] <- tmle_fit_base_rlt
+#   tmle_fit_base_sofa_rlt_list_careunit[[i]] <- tmle_fit_base_sofa_rlt
+#   tmle_fit_base_saps_rlt_list_careunit[[i]] <- tmle_fit_base_saps_rlt
+# 
+#   print("\n haha\n\n")
+# }
+# save.image(here('04_5d_careunit.RData'))
+
+```
+
+
+
+
+## 0. TMLE estimations plots
+```{r}
+load(here('data', 'rdata', '04_5d_careunit.RData'))
+source(here("scripts", "04_rates_5d_functions.R"))
+
+plotFolder <- here("results","images", "04_5d")
+```
+
+
+```{r fig.width=16, fig.height=3}
+tmle_fit_base_sofa_rlt_careunit_all <- do.call("rbind", tmle_fit_base_sofa_rlt_list_careunit) %>% as.data.frame()
+
+tmle_fit_base_sofa_rlt_careunit_all_tsm <- tmle_fit_base_sofa_rlt_careunit_all %>%
+  filter(type == 'TSM') %>%
+  mutate(group = gsub(".*A=(.*)\\}.*", "\\1", param),
+         Y_type = ifelse(Y %in% var_name_list$num_vitals, "n_vital",
+                         ifelse(Y %in% var_name_list$hours_missing_vitals, "h_m_vital",
+                                ifelse(Y %in% var_name_list$num_labs, "n_lab", 'other'))),
+         Y_name = sub("^(n_|h_m_)", "", Y))
+
+tmle_fit_base_sofa_rlt_careunit_all_tsm$group = factor(tmle_fit_base_sofa_rlt_careunit_all_tsm$group)
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_careunit_all_tsm, 'h_m_vital') +
+  labs(title = "Vital Sign Missing Hours")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m.png")), g, width = 15, height = 3, dpi = 1200)
+
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_careunit_all_tsm, 'n_vital') +
+  labs(title = "Vital Sign Measurement Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n.png")), g, width = 15, height = 3, dpi = 1200)
+
+g <- make_box_plots_tmle_rlts(tmle_fit_base_sofa_rlt_careunit_all_tsm, 'n_lab') +
+  labs(title = "Laboratory Testing Frequencies")
+g
+ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")), g, width = 15, height = 3, dpi = 1200)
+```
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+
+df_5d$FIRST_CAREUNIT <- factor(df_5d$FIRST_CAREUNIT)
+
+for (i in 1:length(y_vars)) {
+
+  y = y_vars[i]
+  cat(paste0("\n\n## ", i, ". ", y, "\n\n"))
+
+  cat("Summary of", y,  "w.r.t.", x, "groups: \n")
+  table_result <- table1(as.formula(paste0("~ ", y, "| ", x)), data = df_5d)
+  cat(knitr::asis_output(table_result))
+
+  p <- ggplot(data = df_5d) +
+    geom_density(aes_string(x=y, fill=x), binwidth=1) +
+    facet_wrap(df_5d[,x])
+  ggsave(file=here(plotFolder, paste0(x, "_", i, "_", y, "_EDA.png")), p, width = 6, height = 3, dpi = 1200)
+  plot(p)
+
+
+  cat('\n\n### 1. No confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_0_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 2. SOFA score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_sofa_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+
+  cat('\n\n### 3. SAPS-II score confounder:\n')
+  cat("Summary of linear regression w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(glmfit_saps_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 4. Baseline confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 5. Baselineb & SOFA score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_sofa_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+  cat('\n\n### 6. Baseline & SAPSII score confounders:\n')
+  cat("Summary of TMLE fit w.r.t.", x, "groups: \n")
+  formatted_table <- knitr::kable(tmle_fit_base_saps_rlt_list_careunit[[i]])
+  print(formatted_table)
+
+}
+
+```
+
+
+```{r}
+knitr::knit_exit()
+```

@@ -39,7 +39,13 @@ df <- read.csv(here(PreprocessDataFolder,"02_3_data_complt_blocks.csv"), row.nam
 df_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_imputed_complt_blocks.csv"), row.names = 1, header = T)
 df_r_imp <- read.csv(here(PreprocessDataFolder,"02_3_data_random_imputed_complt_blocks.csv"), row.names = 1, header = T)
 
+df_tmp <- df[df$half_day <= 2, ]
+discharge_in24_id <- df_tmp$ICUSTAY_ID[df_tmp$Y_t == 2]
+df <- df[! df$ICUSTAY_ID %in% discharge_in24_id, ]
+df_imp <- df_imp[! df_imp$ICUSTAY_ID %in% discharge_in24_id, ]
+df_r_imp <- df_r_imp[! df_r_imp$ICUSTAY_ID %in% discharge_in24_id, ]
 
+i8ew34;'c io'
 ## -----------------------------------------------------------------------------------------------------------
 cat("Missing value percentage for each column in the data: \n")
 cat("  Baselines: \n")
