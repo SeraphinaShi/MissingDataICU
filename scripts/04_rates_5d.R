@@ -12,7 +12,6 @@ library(gridExtra)
 library(corrplot)
 library(tmle3)
 library(sl3)
-library(table1)
 library(gtsummary)
 library(knitr)
 
@@ -380,10 +379,7 @@ rm(age_c)
 
 df_5d_all <- df_5d
 
-cat("Summary of age groups: \n")
-table1(~age_cat, data = df_5d)
 
-table1(~sofa+sapsii|age_cat, data = df_5d)
 
 
 ## ----fig.height=3, fig.width=16-------------------------------------------------------------------------------------------------------------------------------
@@ -431,10 +427,7 @@ df_5d$ETHNICITY[is.na(df_5d$ETHNICITY)] = "Missing"
 df_5d$ethnicity = factor(df_5d$ETHNICITY , levels = c("WHITE", "ASIAN", "BLACK", "HISPANIC", "Other", "Missing"))
 df_5d_all$ethnicity <- df_5d$ethnicity
 
-cat("Summary of ethnicities: \n")
-table1(~ethnicity, data = df_5d)
 
-table1(~sofa+sapsii|ethnicity, data = df_5d)
 
 
 
@@ -483,10 +476,6 @@ df_5d$gender = ifelse(df_5d$GENDER == "F", "Female", "Male")
 df_5d$gender = factor(df_5d$gender)
 df_5d_all$gender <- df_5d$gender
 
-cat("Summary of gender: \n")
-table1(~gender, data = df_5d)
-
-table1(~sofa+sapsii|gender, data = df_5d)
 
 
 ## ----gender_severity_Scores, fig.height=3, fig.width=8--------------------------------------------------------------------------------------------------------
