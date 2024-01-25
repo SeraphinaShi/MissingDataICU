@@ -403,7 +403,7 @@ for (i in 1:length(y_vars)) {
   y = y_vars[i]
   cat(paste0("\n## ", i, ". ", y, "\n\n"))
 
-  source('04_rates_5d_template.R')
+  source(here("scripts", "04_rates_5d_template.R"))
 
   glmfit_0_rlt_list[[i]] <- glmfit_0_rlt
   glmfit_sofa_rlt_list[[i]] <- glmfit_sofa_rlt
@@ -453,7 +453,7 @@ for (i in 1:length(y_vars)) {
   y = y_vars[i]
   cat(paste0("\n## ", i, ". ", y, "\n\n"))
 
-  source('04_rates_5d_template.R')
+  source(here("scripts", "04_rates_5d_template.R"))
 
   glmfit_0_rlt_list_eth[[i]] <- glmfit_0_rlt
   glmfit_sofa_rlt_list_eth[[i]] <- glmfit_sofa_rlt
@@ -510,7 +510,7 @@ for (i in 1:length(y_vars)) {
   y = y_vars[i]
   cat(paste0("\n## ", i, ". ", y, "\n\n"))
 
-  source('04_rates_5d_template.R')
+  source(here("scripts", "04_rates_5d_template.R"))
 
   glmfit_0_rlt_list_gender[[i]] <- glmfit_0_rlt
   glmfit_sofa_rlt_list_gender[[i]] <- glmfit_sofa_rlt
@@ -556,7 +556,7 @@ for (i in 1:length(y_vars)) {
   y = y_vars[i]
   cat(paste0("\n## ", i, ". ", y, "\n\n"))
 
-  source('04_rates_5d_template.R')
+  source(here("scripts", "04_rates_5d_template.R"))
 
   glmfit_0_rlt_list_insurance[[i]] <- glmfit_0_rlt
   glmfit_sofa_rlt_list_insurance[[i]] <- glmfit_sofa_rlt
@@ -602,7 +602,7 @@ for (i in 1:length(y_vars)) {
   y = y_vars[i]
   cat(paste0("\n## ", i, ". ", y, "\n\n"))
 
-  source('04_rates_5d_template.R')
+  source(here("scripts", "04_rates_5d_template.R"))
 
   glmfit_0_rlt_list_language[[i]] <- glmfit_0_rlt
   glmfit_sofa_rlt_list_language[[i]] <- glmfit_sofa_rlt
@@ -651,7 +651,7 @@ for (i in 1:length(y_vars)) {
   y = y_vars[i]
   cat(paste0("\n## ", i, ". ", y, "\n\n"))
 
-  source('04_rates_5d_template.R')
+  source(here("scripts", "04_rates_5d_template.R"))
 
   glmfit_0_rlt_list_partner[[i]] <- glmfit_0_rlt
   glmfit_sofa_rlt_list_partner[[i]] <- glmfit_sofa_rlt
@@ -703,7 +703,7 @@ for (i in 1:length(y_vars)) {
   y = y_vars[i]
   cat(paste0("\n## ", i, ". ", y, "\n\n"))
 
-  source('04_rates_5d_template.R')
+  source(here("scripts", "04_rates_5d_template.R"))
 
   glmfit_0_rlt_list_religion[[i]] <- glmfit_0_rlt
   glmfit_sofa_rlt_list_religion[[i]] <- glmfit_sofa_rlt
@@ -748,7 +748,7 @@ for (i in 1:length(y_vars)) {
   y = y_vars[i]
   cat(paste0("\n## ", i, ". ", y, "\n\n"))
 
-  source('04_rates_5d_template.R')
+  source(here("scripts", "04_rates_5d_template.R"))
 
   glmfit_0_rlt_list_careunit[[i]] <- glmfit_0_rlt
   glmfit_sofa_rlt_list_careunit[[i]] <- glmfit_sofa_rlt
