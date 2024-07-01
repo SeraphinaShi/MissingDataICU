@@ -45,7 +45,7 @@ df <- df[! df$ICUSTAY_ID %in% discharge_in24_id, ]
 df_imp <- df_imp[! df_imp$ICUSTAY_ID %in% discharge_in24_id, ]
 df_r_imp <- df_r_imp[! df_r_imp$ICUSTAY_ID %in% discharge_in24_id, ]
 
-i8ew34;'c io'
+
 ## -----------------------------------------------------------------------------------------------------------
 cat("Missing value percentage for each column in the data: \n")
 cat("  Baselines: \n")

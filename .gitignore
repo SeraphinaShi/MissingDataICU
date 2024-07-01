@@ -1,9 +1,13 @@
 .Rproj.user
 .Rhistory
 .RData
+.DS_Store
 .Ruserdata
 .html
 .html
 .Rdata
+.RDataTmp
+*.html
+*.png
 Data/
 Results/

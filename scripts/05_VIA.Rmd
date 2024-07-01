@@ -410,9 +410,16 @@ imputation_block_color <- c("Random" = "#EEB422", "MedianMode" = "#1874CD")
 
 results_df_tmp <- results_df[results_df$var %in% c("W, VS, LT", "n_W, n_VS, h_m_VS, n_LT", "W, VS, LT, n_W, n_VS, h_m_VS, n_LT"), ]
 
+results_df_tmp <- results_df_tmp |>
+  dplyr::mutate(var_set = case_when(
+    var == "W, VS, LT" ~ "Value variables",
+    var == "n_W, n_VS, h_m_VS, n_LT" ~ "Counting variables",
+    var == "W, VS, LT, n_W, n_VS, h_m_VS, n_LT" ~ "Value and counting variables",
+  ))
 
+results_df_tmp$var_set <- factor(results_df_tmp$var_set, levels = c("Value and counting variables",  "Counting variables", "Value variables"))
 
-p <- ggplot(data=results_df_tmp, aes(x=var, y=auc, ymin=ci_l_auc, ymax=ci_u_auc)) +
+p <- ggplot(data=results_df_tmp, aes(x=var_set, y=auc, ymin=ci_l_auc, ymax=ci_u_auc)) +
     geom_point(shape=24, size=2, aes(col = imputation_block, fill = imputation_block)) +
     geom_errorbar(shape=24, width=0.3, aes(col = imputation_block)) +
     # ylim(c(0,1)) +  # not working
