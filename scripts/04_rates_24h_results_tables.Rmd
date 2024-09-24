@@ -1,0 +1,780 @@
+---
+title: "Relationships between baseline characteristics and average mearement rates"
+author: "Seraphina Shi"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+```{r load_lib, include = FALSE, warning=FALSE, message=FALSE, echo=FALSE} 
+# remotes::install_github("tlverse/sl3@devel")
+# remotes::install_github("tlverse/tmle3")
+
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(ggplot2)
+library(here)
+library(future)
+library(gridExtra)
+library(corrplot)
+library(tmle3)
+library(sl3)
+library(table1)
+library(gtsummary)
+library(knitr)
+
+```
+
+```{r setup, include = FALSE}
+plotFolder <- here("results","images", "04_24h")
+if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
+
+rdataFolder <- here("data", "rdata")
+
+knitr::opts_chunk$set(
+  cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=FALSE,
+  results = 'markup', dev='png', dpi=150, fig.align = "center", fig.path=paste0(plotFolder, "/"),
+  cache.path=".cache/",
+  duplicate.label="allow"
+)
+
+set.seed(123)
+```
+
+```{r helper_functions}
+TMLE_rlt_table <- function(tmle_rlt, method = "TMLE") {
+  rult_table <- tmle_rlt |>
+    dplyr::filter(type == "TSM") |>
+    dplyr::mutate(est = paste0(round(tmle_est, 3), 
+                               " (", round(lower_transformed,2), ", ",
+                               round(upper_transformed,2), ")"),
+                  A = sub(".*E\\[Y_\\{A=([^}]*)\\}\\].*", "\\1", param),
+                  method = method) |>
+    dplyr::select(Y, A, method, est)
+  rownames(rult_table) <- NULL
+  return(rult_table)
+}
+
+glm_rlt_table <- function(glm_rlt, method = "GLM") {
+  rult_table <- glm_rlt[! row.names(glm_rlt) %in% c("less_24h", "sofa", "sapsii"), ] 
+  rult_table <- rult_table |>
+    dplyr::mutate(type = rownames(rult_table))
+  
+  if(nrow(rult_table) == 2){
+    rult_table <- rult_table |>
+      dplyr::mutate(A = ifelse(type == "(Intercept)", "0", "1"))
+  } else {
+    intercept_A = A_groups[! A_groups %in% rult_table$A] # get the est for the base (intercept) category
+    rult_table <- rult_table |>
+      dplyr::mutate(A = ifelse(type == "(Intercept)", intercept_A, gsub(x, "", type)))
+  }
+
+  rult_table <- rult_table |>
+    dplyr::mutate(est_val = ifelse(type == "(Intercept)", Estimate, Estimate + rult_table[1,1]),
+                  ci_lower = est_val - 1.96 * `Std. Error`,
+                  ci_upper = est_val + 1.96 * `Std. Error`,
+                  method = method,
+                  est = paste0(round(est_val, 3), 
+                               " (", round(ci_lower,2), ", ",
+                               round(ci_upper,2), ")")) |>
+    dplyr::select(Y, A, method, est)
+  
+  rownames(rult_table) <- NULL
+  return(rult_table)
+}
+```
+
+# AGE vs Rates
+
+```{r}
+load(here('data', 'rdata', '04_24h_age.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+## results tables
+```{r, fig.width=6, fig.height=3, results='asis'}
+rslts_table <- data.frame()
+
+for (i in 1:length(y_vars)) {
+  y = y_vars[i]
+  
+  # extract the table of primary results:
+  # TMLE fit with other baseline variables and SOFA score as confounders
+  primary_rslt <- TMLE_rlt_table(tmle_fit_base_sofa_rlt_list[[i]],
+                                 method = "[prm]TMLE-dmg_sofa")
+
+  # get the table of sensitive analysis
+  A_groups <- primary_rslt$A
+  
+  ## s.1. glm without confounders
+  sens_rslt1 <- glm_rlt_table(glmfit_0_rlt_list[[i]],
+                              method = "GLM")
+  
+  ## s.2. glm with sofa score as a confounder
+  sens_rslt2 <- glm_rlt_table(glmfit_sofa_rlt_list[[i]],
+                              method = "GLM-sofa")
+
+  ## s.3. glm with saps score as a confounder
+  sens_rslt3 <- glm_rlt_table(glmfit_saps_rlt_list[[i]],
+                              method = "GLM-saps")
+  
+  ## s.4. TMLE with other baseline variables as confounders
+  sens_rslt4 <- TMLE_rlt_table(tmle_fit_base_rlt_list[[i]],
+                               method = "TMLE-dmg")
+  
+  ## s.5. TMLE with other baseline variables and saps score as confounders
+  sens_rslt5 <- TMLE_rlt_table(tmle_fit_base_saps_rlt_list[[i]],
+                               method = "TMLE-dmg_saps")
+  
+  rslts_table <- rbind(rslts_table, 
+                       primary_rslt, 
+                       sens_rslt1, sens_rslt2, sens_rslt3, sens_rslt4, sens_rslt5)
+  
+}
+
+A_orders <- c("18-30", "31-45", "46-65", ">65")
+rslts_table$A <- factor(rslts_table$A, levels = A_orders)
+rslts_table <- tidyr::pivot_wider(rslts_table, names_from = A, values_from = est)
+
+kableExtra::kable(as.data.frame(rslts_table),
+                  lightable_options = "striped", full_width = FALSE)
+```
+
+## plots
+```{r, fig.height=3, fig.width=16}
+make_plots_tmle_results(rlt_list = tmle_fit_base_sofa_rlt_list,
+                        trt_name = "Age",
+                        orders = A_orders)
+
+make_plots_tmle_results(rlt_list = tmle_fit_base_sofa_rlt_list,
+                        trt_name = "Age",
+                        orders = A_orders,
+                        y_vars = c("BP", "HR", "TempC"),
+                        y_type_1 = "n_vital",
+                        fig_width = 7, fig_height = 2.5)
+
+make_plots_tmle_results(rlt_list = tmle_fit_base_sofa_rlt_list,
+                        trt_name = "Age",
+                        orders = A_orders,
+                        y_vars = c("lab_grp1", "lab_grp6", "Lac"),
+                        y_type_1 = "n_lab",
+                        fig_width = 7, fig_height = 2.5)
+```
+
+# Ethnicity vs Rates
+```{r}
+load(here('data', 'rdata', '04_24h_eth.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+## results tables
+```{r, fig.width=6, fig.height=3, results='asis'}
+rslts_table_eth <- data.frame()
+
+for (i in 1:length(y_vars)) {
+  y = y_vars[i]
+  
+  # extract the table of primary results:
+  # TMLE fit with other baseline variables and SOFA score as confounders
+  primary_rslt <- TMLE_rlt_table(tmle_fit_base_sofa_rlt_list_eth[[i]],
+                                 method = "[prm]TMLE-dmg_sofa")
+
+  # get the table of sensitive analysis
+  A_groups <- primary_rslt$A
+  
+  ## s.1. glm without confounders
+  sens_rslt1 <- glm_rlt_table(glmfit_0_rlt_list_eth[[i]],
+                              method = "GLM")
+  
+  ## s.2. glm with sofa score as a confounder
+  sens_rslt2 <- glm_rlt_table(glmfit_sofa_rlt_list_eth[[i]],
+                              method = "GLM-sofa")
+
+  ## s.3. glm with saps score as a confounder
+  sens_rslt3 <- glm_rlt_table(glmfit_saps_rlt_list_eth[[i]],
+                              method = "GLM-saps")
+  
+  ## s.4. TMLE with other baseline variables as confounders
+  sens_rslt4 <- TMLE_rlt_table(tmle_fit_base_rlt_list_eth[[i]],
+                               method = "TMLE-dmg")
+  
+  ## s.5. TMLE with other baseline variables and saps score as confounders
+  sens_rslt5 <- TMLE_rlt_table(tmle_fit_base_saps_rlt_list_eth[[i]],
+                               method = "TMLE-dmg_saps")
+  
+  rslts_table_eth <- rbind(rslts_table_eth, 
+                       primary_rslt, 
+                       sens_rslt1, sens_rslt2, sens_rslt3, sens_rslt4, sens_rslt5)
+  
+}
+
+A_orders_eth <- c("WHITE", "ASIAN", "BLACK", "HISPANIC", "Other")
+rslts_table_eth$A <- factor(rslts_table_eth$A, levels = A_orders_eth)
+rslts_table_eth <- tidyr::pivot_wider(rslts_table_eth, names_from = A, values_from = est)
+
+kableExtra::kable(as.data.frame(rslts_table_eth),
+                  lightable_options = "striped", full_width = FALSE)
+```
+
+
+## plots
+```{r, fig.height=3, fig.width=16}
+make_plots_tmle_results(rlt_list = tmle_fit_base_rlt_list_eth,
+                        trt_name = "Race and Ethnicity",
+                        orders = A_orders_eth)
+
+make_plots_tmle_results(rlt_list = tmle_fit_base_rlt_list_eth,
+                        trt_name = "Race and Ethnicity",
+                        orders = A_orders_eth,
+                        y_vars = c("BP", "HR", "RR", "SpO2", "TempC"),
+                        y_type_1 = "n_vital",
+                        fig_width = 10, fig_height = 2.5)
+
+make_plots_tmle_results(rlt_list = tmle_fit_base_rlt_list_eth,
+                        trt_name = "Race and Ethnicity",
+                        orders = A_orders_eth,
+                        y_vars = c("HCT", "lab_grp2", "lab_grp4"),
+                        y_type_1 = "n_lab",
+                        fig_width = 6, fig_height = 2.5)
+```
+
+## compute p-values 
+```{r}
+cal_diff_pvalue <- function(results, comp){
+  par_id_1 = as.numeric(which(grepl(comp[1], results$param))[1]) 
+  par_id_2 = as.numeric(which(grepl(comp[2], results$param))[1]) 
+  
+  theta1 = results$tmle_est[par_id_1]
+  theta2 = results$tmle_est[par_id_2]
+  
+  CI1 = c(results$lower_transformed[par_id_1],
+         results$upper_transformed[par_id_1]) 
+  CI2 = c(results$lower_transformed[par_id_2],
+         results$upper_transformed[par_id_2]) 
+  
+  z <- 1.96  
+  SE1 <- (CI1[2] - CI1[1]) / (2 * z)
+  SE2 <- (CI2[2] - CI2[1]) / (2 * z)
+  
+  # Calculate the difference in treatment effects
+  Delta <- theta1 - theta2
+  
+  # Calculate the standard error of the difference
+  SE_Delta <- sqrt(SE1^2 + SE2^2)
+  
+  # Calculate the test statistic
+  z_score <- Delta / SE_Delta
+  
+  # Calculate the p-value
+  p_value <- 2 * (1 - pnorm(abs(z_score)))
+
+  return(p_value)
+
+}
+```
+
+```{r}
+y_vars
+y = "n_BP"
+
+results = tmle_fit_base_sofa_rlt_list_eth[[which(y_vars == y)]]
+
+comp = c("WHITE", "BLACK")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+comp = c("WHITE", "HISPANIC")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+comp = c("WHITE", "ASIAN")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+comp = c("WHITE", "Other")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+
+comp = c("ASIAN", "BLACK")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+comp = c("ASIAN", "HISPANIC")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+
+comp = c("BLACK", "HISPANIC")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+
+```
+
+```{r}
+y_vars
+y = "n_HR"
+
+results = tmle_fit_base_sofa_rlt_list_eth[[which(y_vars == y)]]
+
+comp = c("WHITE", "BLACK")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+comp = c("WHITE", "HISPANIC")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+comp = c("WHITE", "ASIAN")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+comp = c("WHITE", "Other")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+
+comp = c("ASIAN", "BLACK")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+comp = c("ASIAN", "HISPANIC")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+
+comp = c("BLACK", "HISPANIC")
+p.val = cal_diff_pvalue(results, comp)
+print(p.val)
+
+
+```
+
+
+
+# Gender vs Rates
+
+```{r}
+load(here('data', 'rdata', '04_24h_gender.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+## results table
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+rslts_table_gender <- data.frame()
+
+for (i in 1:length(y_vars)) {
+  y = y_vars[i]
+  
+  # extract the table of primary results:
+  # TMLE fit with other baseline variables and SOFA score as confounders
+  primary_rslt <- TMLE_rlt_table(tmle_fit_base_sofa_rlt_list_gender[[i]],
+                                 method = "[prm]TMLE-dmg_sofa")
+
+  # get the table of sensitive analysis
+  A_groups <- primary_rslt$A
+  
+  ## s.1. glm without confounders
+  sens_rslt1 <- glm_rlt_table(glmfit_0_rlt_list_gender[[i]],
+                              method = "GLM")
+  
+  ## s.2. glm with sofa score as a confounder
+  sens_rslt2 <- glm_rlt_table(glmfit_sofa_rlt_list_gender[[i]],
+                              method = "GLM-sofa")
+
+  ## s.3. glm with saps score as a confounder
+  sens_rslt3 <- glm_rlt_table(glmfit_saps_rlt_list_gender[[i]],
+                              method = "GLM-saps")
+  
+  ## s.4. TMLE with other baseline variables as confounders
+  sens_rslt4 <- TMLE_rlt_table(tmle_fit_base_rlt_list_gender[[i]],
+                               method = "TMLE-dmg")
+  
+  ## s.5. TMLE with other baseline variables and saps score as confounders
+  sens_rslt5 <- TMLE_rlt_table(tmle_fit_base_saps_rlt_list_gender[[i]],
+                               method = "TMLE-dmg_saps")
+  
+  rslts_table_gender <- rbind(rslts_table_gender, 
+                       primary_rslt, 
+                       sens_rslt1, sens_rslt2, sens_rslt3, sens_rslt4, sens_rslt5)
+  
+}
+
+A_orders_gender <- c("Female", "Male")
+rslts_table_gender$A <- factor(ifelse(rslts_table_gender$A == "1", "Female", "Male"), 
+                               levels = A_orders_gender)
+rslts_table_gender <- tidyr::pivot_wider(rslts_table_gender, names_from = A, values_from = est)
+
+kableExtra::kable(as.data.frame(rslts_table_gender),
+                  lightable_options = "striped", full_width = FALSE)
+
+```
+
+
+## plots
+```{r, fig.height=3, fig.width=16}
+make_plots_tmle_results(rlt_list = tmle_fit_base_sofa_rlt_list_gender,
+                        trt_name = "Gender",
+                        orders = A_orders_gender)
+
+make_plots_tmle_results(rlt_list = tmle_fit_base_sofa_rlt_list_gender,
+                        trt_name = "Gender",
+                        orders = A_orders_gender,
+                        y_vars = c("BP", "HR", "TempC"),
+                        y_type_1 = "n_vital",
+                        fig_width = 7, fig_height = 2.5)
+
+make_plots_tmle_results(rlt_list = tmle_fit_base_sofa_rlt_list_gender,
+                        trt_name = "Gender",
+                        orders = A_orders_gender,
+                        y_vars = "all",
+                        y_type_1 = "h_m_vital",
+                        fig_width = 9, fig_height = 4.5,
+                        num_row = 2)
+```
+
+
+
+
+# Insurance vs Rates
+
+```{r}
+load(here('data', 'rdata', '04_24h_insurance.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+## results tables
+```{r, fig.width=6, fig.height=3, results='asis'}
+rslts_table_insurance <- data.frame()
+
+for (i in 1:length(y_vars)) {
+  y = y_vars[i]
+  
+  # extract the table of primary results:
+  # TMLE fit with other baseline variables and SOFA score as confounders
+  primary_rslt <- TMLE_rlt_table(tmle_fit_base_sofa_rlt_list_insurance[[i]],
+                                 method = "[prm]TMLE-dmg_sofa")
+  
+  # get the table of sensitive analysis
+  A_groups <- primary_rslt$A
+  
+  ## s.1. glm without confounders
+  sens_rslt1 <- glm_rlt_table(glmfit_0_rlt_list_insurance[[i]],
+                              method = "GLM")
+  
+  ## s.2. glm with sofa score as a confounder
+  sens_rslt2 <- glm_rlt_table(glmfit_sofa_rlt_list_insurance[[i]],
+                              method = "GLM-sofa")
+
+  ## s.3. glm with saps score as a confounder
+  sens_rslt3 <- glm_rlt_table(glmfit_saps_rlt_list_insurance[[i]],
+                              method = "GLM-saps")
+  
+  ## s.4. TMLE with other baseline variables as confounders
+  sens_rslt4 <- TMLE_rlt_table(tmle_fit_base_rlt_list_insurance[[i]],
+                               method = "TMLE-dmg")
+  
+  ## s.5. TMLE with other baseline variables and saps score as confounders
+  sens_rslt5 <- TMLE_rlt_table(tmle_fit_base_saps_rlt_list_insurance[[i]],
+                               method = "TMLE-dmg_saps")
+  
+  rslts_table_insurance <- rbind(rslts_table_insurance, 
+                       primary_rslt, 
+                       sens_rslt1, sens_rslt2, sens_rslt3, sens_rslt4, sens_rslt5)
+  
+}
+
+A_orders_insurance <- c("Insurance", "No Insurance")
+rslts_table_insurance$A <- factor(ifelse(rslts_table_insurance$A == "1", "Insurance", "No Insurance"), 
+                                  levels = A_orders_insurance)
+rslts_table_insurance <- tidyr::pivot_wider(rslts_table_insurance, names_from = A, values_from = est)
+
+kableExtra::kable(as.data.frame(rslts_table_insurance),
+                  lightable_options = "striped", full_width = FALSE)
+
+```
+
+
+## plots
+```{r, fig.height=3, fig.width=16}
+group_levels <- c("Yes", "No")
+make_plots_tmle_results(rlt_list = tmle_fit_base_sofa_rlt_list_insurance,
+                        trt_name = "Insuranced",
+                        orders = group_levels)
+```
+
+
+# Language vs Rates
+
+```{r}
+load(here('data', 'rdata', '04_24h_language.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+rslts_table_language <- data.frame()
+
+for (i in 1:length(y_vars)) {
+  y = y_vars[i]
+  
+  # extract the table of primary results:
+  # TMLE fit with other baseline variables and SOFA score as confounders
+  primary_rslt <- TMLE_rlt_table(tmle_fit_base_sofa_rlt_list_language[[i]],
+                                 method = "[prm]TMLE-dmg_sofa")
+  
+  # get the table of sensitive analysis
+  A_groups <- primary_rslt$A
+  
+  ## s.1. glm without confounders
+  sens_rslt1 <- glm_rlt_table(glmfit_0_rlt_list_language[[i]],
+                              method = "GLM")
+  
+  ## s.2. glm with sofa score as a confounder
+  sens_rslt2 <- glm_rlt_table(glmfit_sofa_rlt_list_language[[i]],
+                              method = "GLM-sofa")
+
+  ## s.3. glm with saps score as a confounder
+  sens_rslt3 <- glm_rlt_table(glmfit_saps_rlt_list_language[[i]],
+                              method = "GLM-saps")
+  
+  ## s.4. TMLE with other baseline variables as confounders
+  sens_rslt4 <- TMLE_rlt_table(tmle_fit_base_rlt_list_language[[i]],
+                               method = "TMLE-dmg")
+  
+  ## s.5. TMLE with other baseline variables and saps score as confounders
+  sens_rslt5 <- TMLE_rlt_table(tmle_fit_base_saps_rlt_list_language[[i]],
+                               method = "TMLE-dmg_saps")
+  
+  rslts_table_language <- rbind(rslts_table_language, 
+                       primary_rslt, 
+                       sens_rslt1, sens_rslt2, sens_rslt3, sens_rslt4, sens_rslt5)
+  
+}
+
+A_orders_language <- c("ENGL", "Other", "Missing")
+rslts_table_language$A <- factor(rslts_table_language$A, levels = A_orders_language)
+rslts_table_language <- tidyr::pivot_wider(rslts_table_language, names_from = A, values_from = est)
+
+kableExtra::kable(as.data.frame(rslts_table_language),
+                  lightable_options = "striped", full_width = FALSE)
+
+```
+
+## plots
+```{r, fig.height=3, fig.width=16}
+group_levels <- c("English", "Other", "Missing")
+make_plots_tmle_results(rlt_list = tmle_fit_base_sofa_rlt_list_language,
+                        trt_name = "Language",
+                        orders = group_levels)
+```
+
+# Partner vs Rates
+```{r}
+load(here('data', 'rdata', '04_24h_partner.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+## results tables
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+rslts_table_partner <- data.frame()
+
+for (i in 1:length(y_vars)) {
+  y = y_vars[i]
+  
+  # extract the table of primary results:
+  # TMLE fit with other baseline variables and SOFA score as confounders
+  primary_rslt <- TMLE_rlt_table(tmle_fit_base_sofa_rlt_list_partner[[i]],
+                                 method = "[prm]TMLE-dmg_sofa")
+  
+  # get the table of sensitive analysis
+  A_groups <- primary_rslt$A
+  
+  ## s.1. glm without confounders
+  sens_rslt1 <- glm_rlt_table(glmfit_0_rlt_list_partner[[i]],
+                              method = "GLM")
+  
+  ## s.2. glm with sofa score as a confounder
+  sens_rslt2 <- glm_rlt_table(glmfit_sofa_rlt_list_partner[[i]],
+                              method = "GLM-sofa")
+
+  ## s.3. glm with saps score as a confounder
+  sens_rslt3 <- glm_rlt_table(glmfit_saps_rlt_list_partner[[i]],
+                              method = "GLM-saps")
+  
+  ## s.4. TMLE with other baseline variables as confounders
+  sens_rslt4 <- TMLE_rlt_table(tmle_fit_base_rlt_list_partner[[i]],
+                               method = "TMLE-dmg")
+  
+  ## s.5. TMLE with other baseline variables and saps score as confounders
+  sens_rslt5 <- TMLE_rlt_table(tmle_fit_base_saps_rlt_list_partner[[i]],
+                               method = "TMLE-dmg_saps")
+  
+  rslts_table_partner <- rbind(rslts_table_partner, 
+                       primary_rslt, 
+                       sens_rslt1, sens_rslt2, sens_rslt3, sens_rslt4, sens_rslt5)
+  
+}
+
+A_orders_partner <- c("With partner", "No partner", "Missing")
+rslts_table_partner <- rslts_table_partner |>
+  dplyr::mutate(A = dplyr::case_when(A == "not_partnered" ~ "No partner",
+                                     A == "partnered" ~ "With partner",
+                                     TRUE ~ "Missing"),
+                A = factor(A, levels = A_orders_partner))
+rslts_table_partner <- tidyr::pivot_wider(rslts_table_partner, names_from = A, values_from = est) |>
+  dplyr::select(Y, method, all_of(A_orders_partner))
+
+kableExtra::kable(as.data.frame(rslts_table_partner),
+                  lightable_options = "striped", full_width = FALSE)
+
+```
+
+
+## plots
+```{r, fig.height=3, fig.width=16}
+group_levels <- c("partnered", "not_partnered", "Missing")
+make_plots_tmle_results(rlt_list = tmle_fit_base_sofa_rlt_list_partner,
+                        trt_name = "Marital Status",
+                        orders = group_levels)
+```
+
+# Religion vs Rates
+```{r}
+load(here("data", "rdata", '04_24h_religion.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+## results tables
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+rslts_table_religion <- data.frame()
+
+for (i in 1:length(y_vars)) {
+  y = y_vars[i]
+  
+  # extract the table of primary results:
+  # TMLE fit with other baseline variables and SOFA score as confounders
+  primary_rslt <- TMLE_rlt_table(tmle_fit_base_sofa_rlt_list_religion[[i]],
+                                 method = "[prm]TMLE-dmg_sofa")
+  
+  # get the table of sensitive analysis
+  A_groups <- primary_rslt$A
+  
+  ## s.1. glm without confounders
+  sens_rslt1 <- glm_rlt_table(glmfit_0_rlt_list_religion[[i]],
+                              method = "GLM")
+  
+  ## s.2. glm with sofa score as a confounder
+  sens_rslt2 <- glm_rlt_table(glmfit_sofa_rlt_list_religion[[i]],
+                              method = "GLM-sofa")
+
+  ## s.3. glm with saps score as a confounder
+  sens_rslt3 <- glm_rlt_table(glmfit_saps_rlt_list_religion[[i]],
+                              method = "GLM-saps")
+  
+  ## s.4. TMLE with other baseline variables as confounders
+  sens_rslt4 <- TMLE_rlt_table(tmle_fit_base_rlt_list_religion[[i]],
+                               method = "TMLE-dmg")
+  
+  ## s.5. TMLE with other baseline variables and saps score as confounders
+  sens_rslt5 <- TMLE_rlt_table(tmle_fit_base_saps_rlt_list_religion[[i]],
+                               method = "TMLE-dmg_saps")
+  
+  rslts_table_religion <- rbind(rslts_table_religion, 
+                       primary_rslt, 
+                       sens_rslt1, sens_rslt2, sens_rslt3, sens_rslt4, sens_rslt5)
+  
+}
+
+A_orders_religion <- c("Christian", "Other", "Missing")
+rslts_table_religion$A <- factor(rslts_table_religion$A, levels = A_orders_religion)
+rslts_table_religion <- tidyr::pivot_wider(rslts_table_religion, names_from = A, values_from = est) |>
+  dplyr::select(Y, method, all_of(A_orders_religion))
+
+kableExtra::kable(as.data.frame(rslts_table_religion),
+                  lightable_options = "striped", full_width = FALSE)
+```
+
+## plots
+```{r, fig.height=3, fig.width=16}
+group_levels <- c("Christian", "Other", "Missing")
+make_plots_tmle_results(rlt_list = tmle_fit_base_sofa_rlt_list_religion,
+                        trt_name = "Religion",
+                        orders = group_levels)
+```
+
+# Care units
+
+```{r}
+load(here('data', 'rdata', '04_24h_careunit.RData'))
+source(here("scripts", "04_rates_24h_functions.R"))
+
+plotFolder <- here("results","images", "04_24h")
+```
+
+```{r, fig.width=6, fig.height=3, results='asis'}
+rslts_table_careunit <- data.frame()
+
+for (i in 1:length(y_vars)) {
+  y = y_vars[i]
+  
+  # extract the table of primary results:
+  # TMLE fit with other baseline variables and SOFA score as confounders
+  primary_rslt <- TMLE_rlt_table(tmle_fit_base_sofa_rlt_list_careunit[[i]],
+                                 method = "[prm]TMLE-dmg_sofa")
+  
+  # get the table of sensitive analysis
+  A_groups <- primary_rslt$A
+  
+  ## s.1. glm without confounders
+  sens_rslt1 <- glm_rlt_table(glmfit_0_rlt_list_careunit[[i]],
+                              method = "GLM")
+  
+  ## s.2. glm with sofa score as a confounder
+  sens_rslt2 <- glm_rlt_table(glmfit_sofa_rlt_list_careunit[[i]],
+                              method = "GLM-sofa")
+
+  ## s.3. glm with saps score as a confounder
+  sens_rslt3 <- glm_rlt_table(glmfit_saps_rlt_list_careunit[[i]],
+                              method = "GLM-saps")
+  
+  ## s.4. TMLE with other baseline variables as confounders
+  sens_rslt4 <- TMLE_rlt_table(tmle_fit_base_rlt_list_careunit[[i]],
+                               method = "TMLE-dmg")
+  
+  ## s.5. TMLE with other baseline variables and saps score as confounders
+  sens_rslt5 <- TMLE_rlt_table(tmle_fit_base_saps_rlt_list_careunit[[i]],
+                               method = "TMLE-dmg_saps")
+  
+  rslts_table_careunit <- rbind(rslts_table_careunit, 
+                       primary_rslt, 
+                       sens_rslt1, sens_rslt2, sens_rslt3, sens_rslt4, sens_rslt5)
+  
+}
+
+rslts_table_careunit <- tidyr::pivot_wider(rslts_table_careunit, names_from = A, values_from = est) 
+
+kableExtra::kable(as.data.frame(rslts_table_careunit),
+                  lightable_options = "striped", full_width = FALSE)
+```
+

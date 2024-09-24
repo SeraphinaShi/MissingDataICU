@@ -155,18 +155,23 @@ make_box_plots_no_outliers <- function(df_box, y_vars, x){
 
 
 
-make_box_plots_tmle_rlts <- function(df_box, y_type){
+make_box_plots_tmle_rlts <- function(df_box, y_type, rotate_x_lab, x_lab, num_row = 1){
   pi <- ggplot(df_box %>% filter(Y_type == y_type), 
                aes(x = group)) +
     geom_errorbar(aes(ymin=lower, ymax=upper, color=group), width=0.7) +
     geom_point(aes(y=tmle_est, color = group))+
-    facet_wrap(~ Y_name, scales = 'free', nrow = 1) +
-    labs(y="TMLE estimated rates") + # subtitle = 'TMLE estimation with other baseline variables and SOFA score as confounders'
+    facet_wrap(~ Y_name, scales = 'free', nrow = num_row) +
+    labs(y = "TMLE estimated rates", x = x_lab) + # subtitle = 'TMLE estimation with other baseline variables and SOFA score as confounders'
     theme_bw() +
     theme(legend.position = 'none',
-          axis.text.x = element_text(angle = -75, vjust = 0.5, hjust=0),
-          axis.title.x = element_blank(),
-          plot.title = element_text(hjust = 0.5))  # plot.subtitle = element_text(hjust = 0.5)
+          plot.title = element_text(hjust = 0.5),  # plot.subtitle = element_text(hjust = 0.5)
+          strip.text = element_text(size = 12),
+          # strip.background = element_rect(fill = "#FFFFF0"),  # element_blank(),
+          axis.text = element_text(size = 10.5))
+  
+  if (rotate_x_lab) {
+    pi <- pi + theme(axis.text.x = element_text(angle = -75, vjust = 0.5, hjust=0))
+  }
   
   return(pi)
 }
@@ -195,4 +200,87 @@ make_box_plots_tmle_rlts_text <- function(df_box, y_type){
   
   
   return(pi)
+}
+
+
+make_plots_tmle_results <- function(rlt_list, trt_name, orders,
+                                    y_vars = NULL, y_type_1 = 'n_vital',
+                                    fig_width = 17, fig_height = 3,
+                                    num_row = 1) {
+  
+  # prep the data for plots
+  tmle_fit_all <- do.call("rbind", rlt_list) %>% as.data.frame()
+  
+  tmle_fit_all_tsm <- tmle_fit_all %>%
+    filter(type == 'TSM') %>%
+    mutate(group = gsub(".*A=(.*)\\}.*", "\\1", param),
+           Y_type = ifelse(Y %in% var_name_list$num_vitals, "n_vital", 
+                           ifelse(Y %in% var_name_list$hours_missing_vitals, "h_m_vital",
+                                  ifelse(Y %in% var_name_list$num_labs, "n_lab", 'other'))),
+           Y_name = sub("^(n_|h_m_)", "", Y))
+  
+  if (trt_name == "Gender"){
+    tmle_fit_all_tsm$group = ifelse(tmle_fit_all_tsm$group == "1", "Female", "Male")
+  } else if (trt_name %in% c("Insuranced")) {
+    tmle_fit_all_tsm$group = ifelse(tmle_fit_all_tsm$group == "1", "Yes", "No")
+  } else if (trt_name == "Language") {
+    tmle_fit_all_tsm$group[tmle_fit_all_tsm$group == "ENGL"] = "English"
+  }
+  tmle_fit_all_tsm$group = factor(tmle_fit_all_tsm$group,
+                                  levels = orders)
+  
+  if ((!is.null(y_vars)) & all(y_vars != "all")) {
+    tmle_fit_all_tsm <- tmle_fit_all_tsm |>
+      dplyr::filter(Y_name %in% y_vars)
+  }
+  
+  # making plots
+  rotate_x_lab <- ifelse(max(nchar(orders)) > 7 | length(orders) > 6, TRUE, FALSE)
+  
+  if (is.null(y_vars)) {
+    g_vs_hm <- make_box_plots_tmle_rlts(tmle_fit_all_tsm, 'h_m_vital', rotate_x_lab, trt_name) +
+      labs(title = "Marginal Average Hours with Missing Vital Signs Measurements") 
+    g_vs_hm
+    
+    g_vs_n <- make_box_plots_tmle_rlts(tmle_fit_all_tsm, 'n_vital', rotate_x_lab, trt_name) +
+      labs(title = "Marginal Average Vital Sign Measurement Frequencies") 
+    g_vs_n
+    
+    g_lab_n <- make_box_plots_tmle_rlts(tmle_fit_all_tsm, 'n_lab', rotate_x_lab, trt_name) +
+      labs(title = "Marginal Average Laboratory Testing Frequencies") 
+    g_lab_n
+    
+    ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m.png")),
+           g_vs_hm, width = fig_width, height = fig_height, dpi = 1200)
+    
+    ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n.png")),
+           g_vs_n, width = fig_width, height = fig_height, dpi = 1200)
+    
+    ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n.png")),
+           g_lab_n, width = fig_width, height = fig_height, dpi = 1200)
+  } else {
+    all_y_str <- paste(y_vars, collapse = "_")
+    if (y_type_1 == "h_m_vital") {
+      g_vs_hm <- make_box_plots_tmle_rlts(tmle_fit_all_tsm, 'h_m_vital',
+                                          rotate_x_lab, trt_name, num_row) +
+        labs(title = "Marginal Average Hours with Missing Vital Signs Measurements") 
+      g_vs_hm
+      ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_h_m_small_", all_y_str, ".png")),
+             g_vs_hm, width = fig_width, height = fig_height, dpi = 1200)
+    } else if (y_type_1 == "n_vital") {
+      g_vs_n <- make_box_plots_tmle_rlts(tmle_fit_all_tsm, 'n_vital',
+                                         rotate_x_lab, trt_name, num_row) +
+        labs(title = "Marginal Average Vital Sign Measurement Frequencies") 
+      g_vs_n
+      ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_vital_n_small_", all_y_str, ".png")),
+             g_vs_n, width = fig_width, height = fig_height, dpi = 1200)
+    } else {
+      g_lab_n <- make_box_plots_tmle_rlts(tmle_fit_all_tsm, 'n_lab',
+                                          rotate_x_lab, trt_name, num_row) +
+        labs(title = "Marginal Average Laboratory Testing Frequencies") 
+      g_lab_n
+      ggsave(file=here(plotFolder, paste0(x, "_tmle_rlts_box_plot_lab_n_small_", all_y_str, ".png")),
+             g_lab_n, width = fig_width, height = fig_height, dpi = 1200)
+    }
+  }
 }

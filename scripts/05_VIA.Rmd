@@ -20,6 +20,9 @@ library(forcats)
 library(here)
 library(future)
 library(ROCR) 
+library(pROC)
+library(PRROC)
+library(Metrics)
 ```
 
 
@@ -348,7 +351,15 @@ write.csv(results_df, file = here("results", "summary_tables", "04_VIA_sl3_rf_ra
 results_df_randomImput <- results_df
 ```
 
-
+```{r}
+df_y_y_hat <- df_sl3 |> 
+  dplyr::select(ICUSTAY_ID, half_day, Y_t_plus_1,
+                AGE, GENDER_F, INSURANCE_Y, LANGUAGE_ENGL, RELIGION_Chrt, MARITAL_PARTN,
+                ETHNICITY_W, ETHNICITY_B, ETHNICITY_A, ETHNICITY_H, ETHNICITY_O) |>
+  mutate(y_hat_values_only_randomInput = predicts[[1]],
+         y_hat_patterns_only_randomInput = predicts[[4]],
+         y_hat_values_patterns_randomInput = predicts[[7]])
+```
 
 ## Impute with mode or median
 ```{r}
@@ -395,9 +406,152 @@ write.csv(results_df, file = here("results", "summary_tables", "04_VIA_sl3_rf_me
 results_df_medianModeImput <- results_df
 ```
 
+```{r}
+df_y_y_hat <- df_y_y_hat |> 
+  mutate(y_hat_values_only_medInput = predicts[[1]],
+         y_hat_patterns_only_medInput = predicts[[4]],
+         y_hat_values_patterns_medInput = predicts[[7]])
+
+df_y_y_hat_long <- tidyr::pivot_longer(df_y_y_hat,
+                                       cols = c("y_hat_values_only_randomInput",
+                                               "y_hat_patterns_only_randomInput",
+                                               "y_hat_values_patterns_randomInput",
+                                               "y_hat_values_only_medInput",
+                                               "y_hat_patterns_only_medInput",
+                                               "y_hat_values_patterns_medInput"),
+                                      names_to = "method",
+                                      values_to = "y_hat") |>
+  mutate(inputation = ifelse(grepl("randomInput", method), "Random", "MedianMode"),
+         train_set = dplyr::case_when(grepl("values_only", method) ~ "Values solely",
+                                      grepl("patterns_only", method) ~ "Patterns solely",
+                                      TRUE ~ "Values and Patterns")) |>
+  dplyr::select(ICUSTAY_ID, half_day, Y_t_plus_1, inputation, train_set, y_hat, everything())
+
+```
+
+```{r}
+calculate_nll <- function(true_labels, predicted_scores) {
+  epsilon <- 1e-15  # to avoid log(0)
+  predicted_scores <- pmax(epsilon, pmin(1 - epsilon, predicted_scores))
+  -mean(true_labels * log(predicted_scores) + (1 - true_labels) * log(1 - predicted_scores))
+}
+
+performance_age <- df_y_y_hat_long |> 
+  group_by(inputation, train_set) %>%
+  summarize(
+    auc = as.numeric(roc(Y_t_plus_1, y_hat)$auc),
+    aucpr = pr.curve(scores.class0 = y_hat[Y_t_plus_1 == 1], 
+                     scores.class1 = y_hat[Y_t_plus_1 == 0], 
+                     curve = TRUE)$auc.integral,
+    nll = calculate_nll(Y_t_plus_1, y_hat)
+  ) |>
+  print()
+```
+
+# model performances by age
+```{r}
+performance_age <- df_y_y_hat_long |> 
+  mutate(age_group = cut(AGE,
+                         breaks = c(18,30,45,65,101),
+                         labels = c("18-30","31-45","46-65",">65"))) |>
+  group_by(age_group, inputation, train_set) %>%
+  summarize(
+    auc = as.numeric(roc(Y_t_plus_1, y_hat)$auc),
+    aucpr = pr.curve(scores.class0 = y_hat[Y_t_plus_1 == 1], 
+                     scores.class1 = y_hat[Y_t_plus_1 == 0], 
+                     curve = TRUE)$auc.integral,
+    nll = calculate_nll(Y_t_plus_1, y_hat)
+  )
+
+performance_age |>
+  dplyr::select(age_group, inputation, train_set, auc) |>
+  tidyr::pivot_wider(names_from = age_group, values_from = auc) |>
+  print()
+
+performance_age |>
+  dplyr::select(age_group, inputation, train_set, aucpr) |>
+  tidyr::pivot_wider(names_from = age_group, values_from = aucpr)|>
+  print()
+
+performance_age |>
+  dplyr::select(age_group, inputation, train_set, nll) |>
+  tidyr::pivot_wider(names_from = age_group, values_from = nll)|>
+  print()
+```
+
+
+# model performances by race/ethnicity
+```{r}
+c("WHITE", "ASIAN", "BLACK", "HISPANIC", "Other", "Missing")
+
+performance_age <- df_y_y_hat_long |> 
+  mutate(ethnicity = case_when(ETHNICITY_W == 1 ~ "WHITE",
+                               ETHNICITY_A == 1 ~ "ASIAN",
+                               ETHNICITY_B == 1 ~ "BLACK",
+                               ETHNICITY_H == 1 ~ "HISPANIC",
+                               ETHNICITY_O == 1 ~ "Other",
+                               TRUE ~ "Missing")) |>
+  group_by(ethnicity, inputation, train_set) %>%
+  summarize(
+    auc = as.numeric(roc(Y_t_plus_1, y_hat)$auc),
+    aucpr = pr.curve(scores.class0 = y_hat[Y_t_plus_1 == 1], 
+                     scores.class1 = y_hat[Y_t_plus_1 == 0], 
+                     curve = TRUE)$auc.integral,
+    nll = calculate_nll(Y_t_plus_1, y_hat)
+  )
+
+performance_age |>
+  dplyr::select(ethnicity, inputation, train_set, auc) |>
+  tidyr::pivot_wider(names_from = ethnicity, values_from = auc) |>
+  print()
+
+performance_age |>
+  dplyr::select(ethnicity, inputation, train_set, aucpr) |>
+  tidyr::pivot_wider(names_from = ethnicity, values_from = aucpr)|>
+  print()
+
+performance_age |>
+  dplyr::select(ethnicity, inputation, train_set, nll) |>
+  tidyr::pivot_wider(names_from = ethnicity, values_from = nll)|>
+  print()
+```
 
 
 
+
+
+
+# model performances by gender
+```{r}
+performance_age <- df_y_y_hat_long |> 
+  mutate(gender = ifelse(GENDER_F == 1, "Female", "Male")) |>
+  group_by(gender, inputation, train_set) %>%
+  summarize(
+    auc = as.numeric(roc(Y_t_plus_1, y_hat)$auc),
+    aucpr = pr.curve(scores.class0 = y_hat[Y_t_plus_1 == 1], 
+                     scores.class1 = y_hat[Y_t_plus_1 == 0], 
+                     curve = TRUE)$auc.integral,
+    nll = calculate_nll(Y_t_plus_1, y_hat)
+  )
+
+performance_age |>
+  dplyr::select(gender, inputation, train_set, auc) |>
+  tidyr::pivot_wider(names_from = gender, values_from = auc) |>
+  print()
+
+performance_age |>
+  dplyr::select(gender, inputation, train_set, aucpr) |>
+  tidyr::pivot_wider(names_from = gender, values_from = aucpr)|>
+  print()
+
+performance_age |>
+  dplyr::select(gender, inputation, train_set, nll) |>
+  tidyr::pivot_wider(names_from = gender, values_from = nll)|>
+  print()
+```
+
+
+# model performance plots
 ```{r, fig.width=7, fig.height=4}
 results_df <- results_df_medianModeImput %>% mutate(imputation_block = "MedianMode") %>%
               rbind(results_df_randomImput %>% mutate(imputation_block = "Random")) 
@@ -412,19 +566,22 @@ results_df_tmp <- results_df[results_df$var %in% c("W, VS, LT", "n_W, n_VS, h_m_
 
 results_df_tmp <- results_df_tmp |>
   dplyr::mutate(var_set = case_when(
-    var == "W, VS, LT" ~ "Value variables",
-    var == "n_W, n_VS, h_m_VS, n_LT" ~ "Counting variables",
-    var == "W, VS, LT, n_W, n_VS, h_m_VS, n_LT" ~ "Value and counting variables",
+    var == "W, VS, LT" ~ "Values solely",
+    var == "n_W, n_VS, h_m_VS, n_LT" ~ "Patterns solely",
+    var == "W, VS, LT, n_W, n_VS, h_m_VS, n_LT" ~ "Values and Patterns",
   ))
 
-results_df_tmp$var_set <- factor(results_df_tmp$var_set, levels = c("Value and counting variables",  "Counting variables", "Value variables"))
+results_df_tmp$var_set <- factor(results_df_tmp$var_set,
+                                 levels = c("Values and Patterns",
+                                            "Patterns solely",
+                                            "Values solely"))
 
 p <- ggplot(data=results_df_tmp, aes(x=var_set, y=auc, ymin=ci_l_auc, ymax=ci_u_auc)) +
     geom_point(shape=24, size=2, aes(col = imputation_block, fill = imputation_block)) +
     geom_errorbar(shape=24, width=0.3, aes(col = imputation_block)) +
-    # ylim(c(0,1)) +  # not working
+    ylim(c(0.7,0.9)) +  
     coord_flip() +  # flip coordinates (puts labels on y axis)
-    labs(x="Sets of variables")+
+    labs(x="Sets of training variables")+
     labs(y="AUC") +
     ggtitle(" ")+
     theme(plot.title = element_text(hjust = 0.5),
@@ -434,11 +591,12 @@ p <- ggplot(data=results_df_tmp, aes(x=var_set, y=auc, ymin=ci_l_auc, ymax=ci_u_
     scale_color_manual(values = imputation_block_color) +
     scale_fill_manual(values = imputation_block_color) + 
     guides(fill=guide_legend(title="Imputation", nrow = 2),
-           col=guide_legend(title="Imputation", nrow = 2)) 
+           col=guide_legend(title="Imputation", nrow = 2))  +
+  theme_bw()
 
 p
 
-ggsave(here("VIA_rf_AUC.png"), p, width = 7, height = 3, dpi = 800)
+ggsave(here("VIA_rf_AUC.png"), p, width = 6.5, height = 3, dpi = 800)
 
 p2 <- ggplot(data=results_df_tmp, aes(x=var, y=NLL, ymin=ci_l_nll, ymax=ci_u_nll)) +
     geom_point(shape=24, size=2, aes(col = imputation_block, fill = imputation_block)) +
@@ -472,7 +630,6 @@ print(results_df_tmp)
 ```
 
 
-
 ```{r}
 df_rslt <- results_df_tmp[results_df_tmp$imputation_block == "MedianMode", ]
 
@@ -483,6 +640,5 @@ AUCPR <- paste0(round(df_rslt$aucpr, 2), " (", round(df_rslt$ci_l_aucpr, 2), ", 
 df_rslt <- data.frame(df_rslt$var, NLL, AUC, AUCPR)
 print(df_rslt)
 ```
-
 
 
